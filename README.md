@@ -95,4 +95,3 @@ Compared: original `mcef-1.21.4` (`common/src/main/java/com/cinemamod/mcef/`) ag
 
 - Select-box popups are not composited.
 - No find-result counter, favicon callback, navigation-entry list or download handler (java-cef limits).
-- Not built or run as part of this comparison.
