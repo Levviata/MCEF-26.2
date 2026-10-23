@@ -7,7 +7,7 @@ This MCEF port isn't exactly what you expect, as it has been modified for use in
 
 Only differences are listed. Anything not mentioned is identical apart from the package name.
 
-Compared: original `mcef-1.21.4` (`common/src/main/java/com/cinemamod/mcef/`) against the modified `mcef/` folder (this).
+Compared: original `mcef-1.21.4` (`common/src/main/java/com/cinemamod/mcef/`) ([that](https://github.com/CinemaMod/mcef)) against the modified `mcef/` folder (this).
 
 ## 1. Structure
 
