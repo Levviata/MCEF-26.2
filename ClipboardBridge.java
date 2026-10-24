@@ -1,5 +1,7 @@
 package com.levviata.integratedntwiki.mcef;
 
+import com.levviata.integratedntwiki.WikiLog;
+
 import org.cef.browser.CefFrame;
 import org.lwjgl.glfw.GLFW;
 
@@ -22,7 +24,7 @@ import org.lwjgl.glfw.GLFW;
  * </ul>
  * Paste is not bridged: Chromium reads the OS clipboard itself, and what is copied now is on it.
  */
-final class ClipboardBridge {
+public final class ClipboardBridge {
     private static final int MAX_CHARS = 1_000_000;
 
     private ClipboardBridge() {}
@@ -50,7 +52,7 @@ final class ClipboardBridge {
     }
 
     /** Ctrl+C (or Ctrl+X when {@code cut}) in the page. */
-    static void copy(MCEFBrowser browser, boolean cut) {
+    public static void copy(MCEFBrowser browser, boolean cut) {
         CefFrame frame = browser.getFocusedFrame();
         if (frame == null) return;
         String body = "var cut=" + cut + ";var a=document.activeElement,t='',field=false,edit=false;"
@@ -63,7 +65,7 @@ final class ClipboardBridge {
                 + "return t;";
         PageQuery.ask(browser, frame, body, text -> {
             if (text.isEmpty()) return; // nothing selected: the clipboard keeps what it had
-            if (write(text)) MCEF.LOGGER.info("{} {} chars from the page to the OS clipboard", cut ? "Cut" : "Copied", text.length());
+            if (write(text)) WikiLog.info("{} {} chars from the page to the OS clipboard", cut ? "Cut" : "Copied", text.length());
         }, () -> {
             if (browser.isClosed()) return;
             MCEF.LOGGER.warn("The page did not answer the copy request; using Chromium's own {}", cut ? "cut" : "copy");

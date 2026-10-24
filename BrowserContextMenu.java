@@ -1,5 +1,7 @@
 package com.levviata.integratedntwiki.mcef;
 
+import com.levviata.integratedntwiki.WikiLog;
+
 import org.cef.browser.CefBrowser;
 import org.cef.browser.CefFrame;
 import org.cef.callback.CefContextMenuParams;
@@ -31,7 +33,7 @@ final class BrowserContextMenu extends CefContextMenuHandlerAdapter {
         String link = params.getLinkUrl();
         String selection = params.getSelectionText();
         String image = params.getMediaType() == CefContextMenuParams.MediaType.CM_MEDIATYPE_IMAGE ? params.getSourceUrl() : null;
-        MCEF.LOGGER.info("Chromium context menu requested (link={}, selection={} chars, image={}, editable={})",
+        WikiLog.debug("Chromium context menu requested (link={}, selection={} chars, image={}, editable={})",
                 link, selection == null ? 0 : selection.length(), image, params.isEditable());
         pending = new Request(browser, frame, link == null || link.isEmpty() ? null : link,
                 selection == null ? "" : selection, image == null || image.isEmpty() ? null : image,

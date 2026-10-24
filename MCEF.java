@@ -20,6 +20,8 @@
 
 package com.levviata.integratedntwiki.mcef;
 
+import com.levviata.integratedntwiki.WikiLog;
+
 import com.levviata.integratedntwiki.browser.WikiBrowserSecurity;
 import com.levviata.integratedntwiki.browser.WikiUrls;
 import net.minecraft.client.Minecraft;
@@ -80,11 +82,11 @@ public final class MCEF {
     }
 
     static void browserCreated() {
-        LOGGER.info("Chromium browser created, live browsers: {}", LIVE_BROWSERS.incrementAndGet());
+        WikiLog.info("Chromium browser created, live browsers: {}", LIVE_BROWSERS.incrementAndGet());
     }
 
     static void browserClosed() {
-        LOGGER.info("Chromium browser closed, live browsers: {}", LIVE_BROWSERS.decrementAndGet());
+        WikiLog.info("Chromium browser closed, live browsers: {}", LIVE_BROWSERS.decrementAndGet());
     }
 
     /** Starts (once) the background download of the java-cef natives. Safe from any thread. */
@@ -102,6 +104,22 @@ public final class MCEF {
             return;
         }
         new Thread(MCEF::download, "MCEF-Download").start();
+    }
+
+    /**
+     * Gets the native runtime ready in the background before anyone asks for the browser, so the wait at the first H / F9 is only
+     * Chromium's own start-up. Only when the runtime is already installed: a first-ever download still waits for the player to ask
+     * for the browser. The work is the same {@link #prepare()} (checksum check, no extraction when nothing changed), just earlier.
+     */
+    public static void prewarm() {
+        if (state != State.IDLE) return;
+        try {
+            File platformDir = new File(FMLPaths.GAMEDIR.get().resolve("integratedntwiki-cef").resolve("libraries").toFile(),
+                    MCEFPlatform.getPlatform().getNormalizedName());
+            if (platformDir.isDirectory()) prepare();
+        } catch (RuntimeException e) {
+            WikiLog.warn("Could not check for an installed Chromium runtime: {}", e.toString());
+        }
     }
 
     private static void fail() {
@@ -145,14 +163,14 @@ public final class MCEF {
     public static boolean initialize() {
         if (isInitialized()) return true;
         if (state != State.READY) return false;
-        LOGGER.info("Initializing CEF on " + MCEFPlatform.getPlatform().getNormalizedName() + "...");
+        WikiLog.info("Initializing CEF on " + MCEFPlatform.getPlatform().getNormalizedName() + "...");
         if (CefUtil.init()) {
             app = new MCEFApp(CefUtil.getCefApp());
             client = new MCEFClient(CefUtil.getCefClient());
             // The navigation boundary must exist before the first browser does.
             WikiBrowserSecurity.install(client.getHandle());
             client.addContextMenuHandler(new BrowserContextMenu());
-            LOGGER.info("Chromium Embedded Framework initialized");
+            WikiLog.info("Chromium Embedded Framework initialized");
 
             // These are important; the jcef process will linger around if not done. macOS is special.
             MCEFPlatform platform = MCEFPlatform.getPlatform();
@@ -205,6 +223,7 @@ public final class MCEF {
 
     /** Request a shutdown of CEF. Nothing happens if not initialized. */
     public static synchronized void shutdown() {
+        com.levviata.integratedntwiki.desktop.DesktopShell.shutdown();
         if (isInitialized()) {
             CefUtil.shutdown();
             client = null;

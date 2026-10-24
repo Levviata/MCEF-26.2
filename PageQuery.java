@@ -18,12 +18,15 @@ import org.cef.handler.CefDisplayHandlerAdapter;
  * scripts cannot make the shell act by logging something. A question the page never answers (script blocked, page
  * navigating) times out and runs its fallback. Callbacks run inside {@code MCEF.pump()} on the render thread.
  */
-final class PageQuery {
+public final class PageQuery {
     private static final String PREFIX = "__integratedntwiki_query:";
     private static final long TIMEOUT_MILLIS = 400;
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private record Pending(CefBrowser browser, Consumer<String> reply, Runnable timeout, long deadline) {}
+
+    /** How long marker captures and restores wait: the page may be busy laying out a long article. */
+    public static final long SLOW_TIMEOUT_MILLIS = 2000;
 
     private static final Map<Long, Pending> PENDING = new ConcurrentHashMap<>();
     private static MCEFClient installedOn;
@@ -68,13 +71,18 @@ final class PageQuery {
      * @param timeout run when the page does not answer in time (may be null)
      */
     static void ask(CefBrowser browser, CefFrame frame, String body, Consumer<String> reply, Runnable timeout) {
+        ask(browser, frame, body, reply, timeout, TIMEOUT_MILLIS);
+    }
+
+    /** As above, with a longer wait ({@link #SLOW_TIMEOUT_MILLIS}) for questions that scan the whole page. */
+    public static void ask(CefBrowser browser, CefFrame frame, String body, Consumer<String> reply, Runnable timeout, long timeoutMillis) {
         CefFrame target = frame != null ? frame : browser.getFocusedFrame();
         if (target == null) {
             if (timeout != null) timeout.run();
             return;
         }
         long nonce = RANDOM.nextLong() & Long.MAX_VALUE;
-        PENDING.put(nonce, new Pending(browser, reply, timeout, System.currentTimeMillis() + TIMEOUT_MILLIS));
+        PENDING.put(nonce, new Pending(browser, reply, timeout, System.currentTimeMillis() + timeoutMillis));
         String js = "(function(){var r='';try{r=String((function(){" + body + "})());}catch(e){r='';}"
                 + "console.log('" + PREFIX + nonce + ":'+encodeURIComponent(r));})();";
         target.executeJavaScript(js, target.getURL(), 0);

@@ -31,6 +31,7 @@ import org.cef.handler.CefScreenInfo;
 import org.lwjgl.glfw.GLFW;
 
 import java.awt.Point;
+import com.levviata.integratedntwiki.shell.desktop.FrameSink;
 import java.awt.Rectangle;
 import java.nio.ByteBuffer;
 
@@ -179,7 +180,25 @@ public class MCEFBrowser extends CefBrowserOsr {
     @Override
     public void onPaint(CefBrowser browser, boolean popup, Rectangle[] dirtyRects, ByteBuffer buffer, int width, int height) {
         if (popup || dirtyRects.length == 0 || hidden) return;
+        FrameSink target = sink;
+        if (target != null) { // shown in a desktop window: the Minecraft texture is not needed (and not kept up to date)
+            target.onFrame(buffer, width, height, dirtyRects);
+            return;
+        }
         renderer.onPaint(buffer, width, height, dirtyRects);
+    }
+
+    private volatile FrameSink sink;
+
+    /** Sends frames to {@code sink} instead of the Minecraft texture; null goes back to the texture (and repaints it fully). */
+    public void setFrameSink(FrameSink sink) {
+        FrameSink before = this.sink;
+        this.sink = sink;
+        if (before != sink && !isClosed()) invalidate(); // the new target has no picture yet
+    }
+
+    public FrameSink getFrameSink() {
+        return sink;
     }
 
     private boolean hidden;

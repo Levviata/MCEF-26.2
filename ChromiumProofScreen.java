@@ -1,14 +1,23 @@
 package com.levviata.integratedntwiki.mcef;
 
+import com.levviata.integratedntwiki.WikiLog;
+
 import com.levviata.integratedntwiki.browser.UrlInput;
 import com.levviata.integratedntwiki.browser.WikiUrls;
 import com.levviata.integratedntwiki.client.WikiKeys;
+import com.levviata.integratedntwiki.config.MarkerStorage;
 import com.levviata.integratedntwiki.config.WikiConfig;
 import com.levviata.integratedntwiki.shell.BrowserSession;
 import com.levviata.integratedntwiki.shell.BrowserTab;
+import com.levviata.integratedntwiki.shell.ControlList;
+import com.levviata.integratedntwiki.shell.ControlSource;
 import com.levviata.integratedntwiki.shell.Favicons;
 import com.levviata.integratedntwiki.shell.Icons;
 import com.levviata.integratedntwiki.shell.LoadErrors;
+import com.levviata.integratedntwiki.shell.Marker;
+import com.levviata.integratedntwiki.shell.MarkerCodec;
+import com.levviata.integratedntwiki.shell.MarkerScripts;
+import com.levviata.integratedntwiki.shell.MarkerStore;
 import com.levviata.integratedntwiki.shell.PageKeys;
 import com.levviata.integratedntwiki.shell.ShellLayout;
 import com.levviata.integratedntwiki.shell.ShellLayout.Hit;
@@ -18,6 +27,13 @@ import com.levviata.integratedntwiki.shell.ShellScale;
 import com.levviata.integratedntwiki.shell.Shortcuts;
 import com.levviata.integratedntwiki.shell.TextField;
 import com.levviata.integratedntwiki.shell.UrlBarState;
+import com.levviata.integratedntwiki.shell.desktop.Box;
+import com.levviata.integratedntwiki.desktop.DesktopShell;
+import com.levviata.integratedntwiki.browser.ExternalBrowser;
+import com.levviata.integratedntwiki.shell.desktop.SnapEngine;
+import com.levviata.integratedntwiki.shell.desktop.SnapIntent;
+import com.levviata.integratedntwiki.shell.desktop.SnapSettings;
+import com.levviata.integratedntwiki.shell.desktop.SnapZone;
 import com.levviata.integratedntwiki.shell.Zoom;
 import java.util.HashSet;
 import java.util.OptionalInt;
@@ -53,7 +69,7 @@ public final class ChromiumProofScreen extends Screen {
             TAB_ACTIVE = 0xFF3A3A3A, TAB_IDLE = 0xFF262626, TAB_HOVER = 0xFF303030, TOOLBAR_BG = 0xFF3A3A3A,
             BUTTON_HOVER = 0xFF555555, BUTTON_PRESSED = 0xFF6E6E6E, CLOSE_HOVER = 0xFFB02020, PAGE_BASE = 0xFF101010,
             TEXT = 0xFFE6E6E6, TEXT_DIM = 0xFF808080, ACCENT = 0xFF4FA0FF, ERROR_COLOR = 0xFFFF5555,
-            FIELD_BG = 0xFF161616, SELECTION = 0xAA3A6EA5, PIN_COLOR = 0xFFD8A83A;
+            FIELD_BG = 0xFF161616, SELECTION = 0xAA3A6EA5, PIN_COLOR = 0xFFD8A83A, WARN_COLOR = 0xFFFF8A5C;
     private static final long STATUS_MILLIS = 4000, CARET_BLINK_MILLIS = 530, CHARS_AFTER_HOTKEY_IGNORED_MILLIS = 120;
 
     /** Ctrl+Shift+F1..F9 load these through the browser to prove the boundary; all but the first must be blocked. */
@@ -84,7 +100,7 @@ public final class ChromiumProofScreen extends Screen {
         boolean separator() { return label == null; }
     }
     /** Two different menus: the page's (Chromium says what was clicked) and a tab's (the shell's own). They never share state. */
-    private enum MenuKind { PAGE, TAB }
+    private enum MenuKind { PAGE, TAB, MARKER }
     private MenuKind menuKind = MenuKind.PAGE;
     /** The tab a TAB menu acts on (the right-clicked tab, not necessarily the active one). */
     private BrowserTab menuTarget;
@@ -108,6 +124,12 @@ public final class ChromiumProofScreen extends Screen {
     private String syncedUrl = "";
     private long caretBlinkStart, ignoreCharsUntil, statusUntil;
     private String status = "";
+    private int statusColor = ERROR_COLOR;
+
+    // Controls key map ([Keys] button / openControlList key): lines read from the game when it opens, scrolled by whole lines.
+    private boolean keysOpen, openKeys;
+    private int keysScroll;
+    private java.util.List<ControlList.Line> keysLines = java.util.List.of();
 
     // Zoom menu (Phase 6): "[-  100%  +  [Reset]]". Clicking the percentage turns it into a field to type a zoom into.
     private boolean zoomMenuOpen, zoomEditing;
@@ -121,11 +143,34 @@ public final class ChromiumProofScreen extends Screen {
     /** What was last handed to Chromium's search; a different text starts a new search, the same one continues it. */
     private String searchedText = "";
 
+    // Marker panel (Phase 8.5). Global, like the markers themselves; it belongs to the tab it was opened on, so switching tabs closes it.
+    private boolean markerPanelOpen;
+    private BrowserTab markerTab;
+    private int markerScroll;
+    /** The marker whose name is being edited in the panel (null: none), and the field holding the text. */
+    private String markerRenameId;
+    private final TextField markerText = new TextField();
+    /** A marker the panel points out (a duplicate that was not added). */
+    private String markerHighlight;
+
     /** Keys whose press this screen consumed (shortcuts, Esc): their release must not reach the page either. */
     private final Set<Integer> consumedKeys = new HashSet<>();
 
     /** Shown once as a status line when the screen opens (e.g. "Nothing to look up here"); null for none. */
     private String openMessage;
+
+    // Phase 10: snapping, tear-off. {@code overlay}: opened over another screen (F9 over a menu); only the shell state records it,
+    // the screen is drawn exactly as when opened over nothing (see extractRenderState).
+    private boolean overlay;
+    /** The pointer has moved far enough since the press for this to be a drag (snapping and tear-off only apply then). */
+    private boolean dragMoved;
+    /** The zone being previewed and the rectangle (shell units) it would give the window; applied only on release. */
+    private SnapZone snapZone = SnapZone.NONE;
+    private final SnapIntent snapIntent = new SnapIntent();
+    private Box snapBox;
+    /** The pointer pulled the window out of the Minecraft window: the desktop window now owns it and this screen only waits for the button to be released. */
+    private boolean tearing;
+    private static final int DRAG_THRESHOLD = 4;
 
     private ChromiumProofScreen(Screen parent) {
         super(Component.translatable("integratedntwiki.title"));
@@ -133,11 +178,41 @@ public final class ChromiumProofScreen extends Screen {
     }
 
     public static void open(net.minecraft.client.Minecraft minecraft) {
-        minecraft.gui.setScreen(new ChromiumProofScreen(minecraft.gui.screen()));
+        Screen current = minecraft.gui.screen();
+        if (current instanceof ChromiumProofScreen) return; // already showing: never stack a second browser window on the first
+        openOverlay(minecraft, current);
+    }
+
+    /**
+     * F9 over another screen (or from the game): the window opens over {@code parent} and returns to it when closed. It is drawn like
+     * any other Minecraft screen (its own background); the screen underneath is not drawn around it.
+     */
+    public static void openOverlay(net.minecraft.client.Minecraft minecraft, Screen parent) {
+        if (DesktopShell.interceptOpen(null)) return; // the shell lives on the desktop: F9 shows / hides that window instead
+        ChromiumProofScreen screen = new ChromiumProofScreen(parent);
+        screen.overlay = parent != null;
+        minecraft.gui.setScreen(screen);
+    }
+
+    /**
+     * The openControlList key from the game or over another screen: the controls key map opens in the shell (in the desktop window
+     * when the shell lives there; while this screen is up the key toggles the panel).
+     */
+    public static void openControls(net.minecraft.client.Minecraft minecraft, Screen parent) {
+        if (minecraft.gui.screen() instanceof ChromiumProofScreen open) {
+            open.toggleKeys();
+            return;
+        }
+        if (DesktopShell.interceptControls()) return;
+        ChromiumProofScreen screen = new ChromiumProofScreen(parent);
+        screen.overlay = parent != null;
+        screen.openKeys = true;
+        minecraft.gui.setScreen(screen);
     }
 
     /** The H key: opens the window over {@code parent} on {@code url} (a wiki address), optionally with a message. */
     public static void open(net.minecraft.client.Minecraft minecraft, Screen parent, String url, String message) {
+        if (DesktopShell.interceptOpen(url)) return; // the shell is a desktop window: the address opens there
         ChromiumProofScreen screen = new ChromiumProofScreen(parent);
         screen.openMessage = message;
         BrowserSession.get().showAddress(url);
@@ -149,10 +224,13 @@ public final class ChromiumProofScreen extends Screen {
         MCEF.prepare();
         session = BrowserSession.get();
         if (openMessage != null) { showStatus(openMessage); openMessage = null; }
+        if (openKeys) { openKeys = false; showKeys(); }
         session.useUnit(unit());
         session.place(shellW(), shellH());
+        markers().refresh(); // reads the saved markers (false = config not readable yet; the panel tries again when opened)
         if (!shown) {
             shown = true;
+            session.shell().showInMinecraft(overlay);
             session.onScreenShown();
         }
     }
@@ -179,7 +257,7 @@ public final class ChromiumProofScreen extends Screen {
     }
 
     private Hit hitAt(double guiX, double guiY) {
-        return session.layout().hit(toShell(guiX), toShell(guiY), session.activeIndex(), session.urlBar().visible(), zoomMenuOpen, findOpen);
+        return session.layout().hit(toShell(guiX), toShell(guiY), session.activeIndex(), session.urlBar().visible(), zoomMenuOpen, findOpen, markerRowCount(), keysOpen);
     }
 
     private static boolean isZoomPart(Part part) {
@@ -189,6 +267,14 @@ public final class ChromiumProofScreen extends Screen {
 
     private static boolean isFindPart(Part part) {
         return part == Part.FIND_BAR || part == Part.FIND_FIELD || part == Part.FIND_PREVIOUS || part == Part.FIND_NEXT || part == Part.FIND_CLOSE;
+    }
+
+    private static boolean isKeysPart(Part part) {
+        return part == Part.KEYS_PANEL || part == Part.KEYS_CLOSE;
+    }
+
+    private static boolean isMarkerPart(Part part) {
+        return part == Part.MARKER_PANEL || part == Part.MARKER_ADD || part == Part.MARKER_ROW || part == Part.MARKER_DELETE;
     }
 
     /** Parts that are drawn over the page and swallow what happens on them (the zoom button itself is in the toolbar). */
@@ -223,14 +309,26 @@ public final class ChromiumProofScreen extends Screen {
 
     private void showStatus(String message) {
         status = message;
+        statusColor = ERROR_COLOR;
         statusUntil = System.currentTimeMillis() + STATUS_MILLIS;
+    }
+
+    /** Like {@link #showStatus} for good news (a marker was added): drawn in the normal text colour, not the error red. */
+    private void showNote(String message) {
+        showStatus(message);
+        statusColor = TEXT;
     }
 
     // ---- drawing
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+        // Minecraft's own background, always. The screen this one was opened over is NOT drawn underneath: Minecraft already
+        // called its removed() when this screen replaced it (a container screen has closed its menu by then), it is not
+        // re-laid-out when the window changes size, and drawing it a second time inside this screen's own render pass broke it as
+        // soon as the browser rendered. It is initialised again properly by setScreen(parent) when this screen closes.
         super.extractRenderState(g, mouseX, mouseY, partialTick);
+        if (tearing) return; // the window is a desktop window now; this screen only waits for the button to be released
         if (MCEF.state() == MCEF.State.FAILED) {
             g.centeredText(font, Component.translatable("integratedntwiki.chromium.failed"), width / 2, height / 2, ERROR_COLOR);
             return;
@@ -258,23 +356,30 @@ public final class ChromiumProofScreen extends Screen {
         tab.input().updateWindowFocus();
         keepAutoscrollSane(tab.input());
         keepFindOnItsTab(tab);
-        if (menuOpen && (menuKind == MenuKind.PAGE ? session.active() != menuTab : session.indexOf(menuTarget) < 0)) closeContextMenu();
+        if (markerPanelOpen && session.active() != markerTab) closeMarkerPanel(true); // switched to another tab (or it closed)
+        if (menuOpen && (menuKind == MenuKind.PAGE ? session.active() != menuTab : menuKind == MenuKind.MARKER ? !markerPanelOpen : session.indexOf(menuTarget) < 0)) closeContextMenu();
+        if (drag == Drag.MOVE && dragMoved && !tearing) tickSnapPreview();
         updateUrlBar(tab, (int) Math.floor(toShell(mouseX)), (int) Math.floor(toShell(mouseY)));
 
         MCEF.pump();
         PageQuery.tick();
         pollContextMenu(session.active());
+        String failure = ExternalBrowser.takeFailure(); // a link handed to the OS could not be opened
+        if (failure != null) showStatus(Component.translatable("integratedntwiki.external." + failure + "Failed").getString());
+        String notice = session.takeNotice(); // the outcome of a marker navigation (restored approximately, page failed ...)
+        if (notice != null) showStatus(notice);
         float scale = (float) (unit / guiScale());
         g.pose().pushMatrix();
         g.pose().scale(scale, scale);
         drawShell(g, session.layout(), tab, (int) Math.floor(toShell(mouseX)), (int) Math.floor(toShell(mouseY)), unit);
+        drawSnapPreview(g);
         g.pose().popMatrix();
-        if (System.currentTimeMillis() < statusUntil) g.text(font, status, 4, height - 12, ERROR_COLOR, true);
+        if (System.currentTimeMillis() < statusUntil) g.text(font, status, 4, height - 12, statusColor, true);
     }
 
     /** Draws the shell; everything here is in shell units (the caller applied the pose scale), mouse included. */
     private void drawShell(GuiGraphicsExtractor g, ShellLayout layout, BrowserTab active, int mouseX, int mouseY, int unit) {
-        Hit hover = drag == Drag.NONE ? layout.hit(mouseX, mouseY, session.activeIndex(), session.urlBar().visible(), zoomMenuOpen, findOpen) : Hit.NONE;
+        Hit hover = drag == Drag.NONE ? layout.hit(mouseX, mouseY, session.activeIndex(), session.urlBar().visible(), zoomMenuOpen, findOpen, markerRowCount(), keysOpen) : Hit.NONE;
         Rect win = layout.window();
         g.fill(win.x(), win.y(), win.right(), win.bottom(), EDGE);
         g.fill(win.x() + 1, win.y() + 1, win.right() - 1, win.bottom() - 1, BG);
@@ -304,6 +409,13 @@ public final class ChromiumProofScreen extends Screen {
         button(g, zoomButton, hover.part() == Part.ZOOM_BUTTON, Part.ZOOM_BUTTON, true, Icons.ZOOM, false);
         // like Chrome's magnifier in the address bar: marked while this page is not at 100%, and while the menu is open
         if (zoomMenuOpen || Math.abs(active.zoomLevel()) > 1e-6) g.fill(zoomButton.x() + 2, zoomButton.bottom() - 2, zoomButton.right() - 2, zoomButton.bottom(), ACCENT);
+        Rect markerButton = layout.markerButton();
+        button(g, markerButton, hover.part() == Part.MARKER_BUTTON, Part.MARKER_BUTTON, true, Icons.MARKER, false);
+        // like Chrome's star: marked while this page has markers (and while the panel is open)
+        if (markerPanelOpen || (markers().isLoaded() && markers().countFor(active.url()) > 0)) g.fill(markerButton.x() + 2, markerButton.bottom() - 2, markerButton.right() - 2, markerButton.bottom(), PIN_COLOR);
+        Rect keysButton = layout.keysButton();
+        button(g, keysButton, hover.part() == Part.KEYS_BUTTON, Part.KEYS_BUTTON, true, Icons.KEYS, false);
+        if (keysOpen) g.fill(keysButton.x() + 2, keysButton.bottom() - 2, keysButton.right() - 2, keysButton.bottom(), ACCENT);
         if (active.loading()) { // indeterminate bar along the bottom of the toolbar
             int seg = Math.max(40, tool.w() / 4);
             int pos = (int) ((System.currentTimeMillis() % 1400) / 1400.0 * (tool.w() + seg)) - seg;
@@ -330,6 +442,8 @@ public final class ChromiumProofScreen extends Screen {
         if (active.errorText() != null) drawLoadError(g, c, active);
         if (findOpen) drawFindBar(g, layout, hover);
         if (zoomMenuOpen) drawZoomMenu(g, layout, active, hover);
+        if (markerPanelOpen) drawMarkerPanel(g, layout, active, hover);
+        if (keysOpen) drawKeysPanel(g, layout, hover);
 
         if (menuOpen) drawContextMenu(g, mouseX, mouseY);
 
@@ -410,9 +524,10 @@ public final class ChromiumProofScreen extends Screen {
     private void updateUrlBar(BrowserTab tab, int shellX, int shellY) {
         ShellLayout layout = session.layout();
         UrlBarState bar = session.urlBar();
-        boolean inTopStrip = drag == Drag.NONE && layout.hoverZone().contains(shellX, shellY);
+        // hovering the bar's own place reveals it; not while a menu or panel is open over the window, and never mid-drag
+        boolean inTopStrip = drag == Drag.NONE && !menuOpen && layout.hoverZone().contains(shellX, shellY);
         boolean overBar = layout.title().contains(shellX, shellY) || layout.urlButton().contains(shellX, shellY)
-                || layout.zoomButton().contains(shellX, shellY);
+                || layout.zoomButton().contains(shellX, shellY) || layout.markerButton().contains(shellX, shellY);
         bar.update(inTopStrip, overBar, urlFocused, System.currentTimeMillis());
         if (!bar.visible() && urlFocused) blurUrlField(true);
         if (!urlFocused && !tab.url().equals(syncedUrl)) {
@@ -423,6 +538,7 @@ public final class ChromiumProofScreen extends Screen {
 
     private void focusUrlField(boolean selectAll) {
         BrowserTab tab = session.active();
+        closeMarkerPanel(true);
         findFocused = false; // one text field has the caret at a time
         zoomEditing = false;
         urlFocused = true;
@@ -478,6 +594,15 @@ public final class ChromiumProofScreen extends Screen {
     private void submitUrl(BrowserTab tab) {
         var url = UrlInput.toUrl(urlText.text());
         if (url.isEmpty()) return;
+        if (WikiUrls.isExternalProtocol(url.get())) { // an e-mail address, mailto: or xmpp: link typed by the user goes to their own program
+            if (ExternalBrowser.open(url.get())) {
+                session.urlBar().dismissTemporary();
+                blurUrlField(true);
+            } else {
+                showStatus(Component.translatable("integratedntwiki.urlbar.blocked").getString());
+            }
+            return;
+        }
         if (!WikiUrls.isTopLevelAllowed(url.get())) { // stays open so it can be corrected
             showStatus(Component.translatable("integratedntwiki.urlbar.blocked").getString());
             return;
@@ -563,7 +688,7 @@ public final class ChromiumProofScreen extends Screen {
     private void paste(TextField field) {
         String clip = ClipboardBridge.read();
         if (clip == null || clip.isEmpty()) {
-            MCEF.LOGGER.info("Paste into a shell field: the OS clipboard holds no text");
+            WikiLog.info("Paste into a shell field: the OS clipboard holds no text");
             showStatus(Component.translatable("integratedntwiki.clipboard.noText").getString());
             return;
         }
@@ -589,6 +714,7 @@ public final class ChromiumProofScreen extends Screen {
         }
         BrowserTab tab = session.active();
         if (tab != null) tab.input().cancelAutoscroll();
+        closeMarkerPanel(true);
         zoomMenuOpen = true;
         zoomEditing = false;
     }
@@ -631,7 +757,7 @@ public final class ChromiumProofScreen extends Screen {
     /** Gives the page the keyboard back unless one of the shell's text fields is still being edited. */
     private void returnKeyboardToPage() {
         BrowserTab tab = session.active();
-        if (tab != null && !urlFocused && !findFocused && !zoomEditing) tab.input().focusBrowser();
+        if (tab != null && !urlFocused && !findFocused && !zoomEditing && markerRenameId == null) tab.input().focusBrowser();
     }
 
     private void wheelZoom(double scrollY) {
@@ -663,6 +789,7 @@ public final class ChromiumProofScreen extends Screen {
 
     private void focusFind() {
         BrowserTab tab = session.active();
+        closeMarkerPanel(true);
         urlFocused = false;
         zoomEditing = false;
         findFocused = true;
@@ -732,8 +859,8 @@ public final class ChromiumProofScreen extends Screen {
 
     private int fieldOrigin(TextField field) {
         ShellLayout layout = session.layout();
-        Rect r = field == findText ? layout.findField() : field == zoomText ? layout.zoomValue() : layout.urlField();
-        return r.x() + 4;
+        Rect r = field == findText ? layout.findField() : field == zoomText ? layout.zoomValue() : field == markerText ? markerRenameRect() : layout.urlField();
+        return (r == null ? layout.urlField() : r).x() + 4;
     }
 
     // ---- autoscroll upkeep
@@ -857,6 +984,21 @@ public final class ChromiumProofScreen extends Screen {
         Hit hit = hitAt(event.x(), event.y());
         // The zoom menu closes when the user clicks anywhere else (the zoom button toggles it itself).
         if (zoomMenuOpen && !isZoomPart(hit.part())) closeZoomMenu();
+        // Marker panel: a click inside the name being edited moves its caret; any other click ends the edit (the typed name is kept)
+        // and a click outside the panel closes it (the marker button toggles it itself).
+        if (markerRenameId != null) {
+            Rect field = markerRenameRect();
+            if (field != null && button == GLFW.GLFW_MOUSE_BUTTON_LEFT && field.contains(x, y)) {
+                markerText.setCaretFromX((int) x - fieldOrigin(markerText), false, metrics());
+                draggingField = markerText;
+                tab.input().focusMinecraft();
+                return true;
+            }
+            commitMarkerRename();
+        }
+        if (markerPanelOpen && !isMarkerPart(hit.part()) && hit.part() != Part.MARKER_BUTTON) closeMarkerPanel(true);
+        // The controls key map closes on a click anywhere else (its button toggles it itself).
+        if (keysOpen && !isKeysPart(hit.part()) && hit.part() != Part.KEYS_BUTTON) closeKeys();
         // A click outside the page ends an autoscroll and does nothing else (inside the page Chromium ends it itself).
         if (hit.part() != Part.CONTENT && tab.input().autoscrolling()) {
             tab.input().cancelAutoscroll();
@@ -867,6 +1009,12 @@ public final class ChromiumProofScreen extends Screen {
         if (button == GLFW.GLFW_MOUSE_BUTTON_RIGHT && (hit.part() == Part.TAB || hit.part() == Part.TAB_CLOSE)) {
             openTabMenu(hit.index(), x, y);
             swallowRightRelease = true; // Chromium opens its menu on the right button's RELEASE: that release must not reach it
+            return true;
+        }
+        // Right-click on a marker row: its menu (open, open in new tab, rename, delete), the shell's own like the tab menu.
+        if (button == GLFW.GLFW_MOUSE_BUTTON_RIGHT && hit.part() == Part.MARKER_ROW) {
+            openMarkerMenu(hit.index(), x, y);
+            swallowRightRelease = true;
             return true;
         }
         if (hit.part() == Part.CONTENT) {
@@ -910,6 +1058,11 @@ public final class ChromiumProofScreen extends Screen {
                 }
                 case DRAG -> {
                     drag = Drag.MOVE;
+                    dragMoved = false;
+                    snapZone = SnapZone.NONE;
+                    snapIntent.reset();
+                    snapBox = null;
+                    session.shell().beginDrag();
                     pressShellX = (int) x;
                     pressShellY = (int) y;
                     grabX = (int) x - session.windowX();
@@ -922,12 +1075,23 @@ public final class ChromiumProofScreen extends Screen {
             }
         } else if (button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE && hit.part() == Part.TAB) {
             closeTabAt(hit.index());
+        } else if (button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE && hit.part() == Part.MARKER_ROW) {
+            openMarkerAt(hit.index(), true);
         }
         return true;
     }
 
     @Override
     public boolean mouseReleased(MouseButtonEvent event) {
+        if (tearing && event.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT) { // the desktop window takes over from here
+            tearing = false;
+            pressed = null;
+            drag = Drag.NONE;
+            onClose();
+            DesktopShell.handoffRelease();
+            return true;
+        }
+        if (event.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT && drag == Drag.MOVE) commitSnap();
         if (event.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT) draggingField = null;
         if (event.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT && (pressed != null || drag != Drag.NONE)) {
             Hit down = pressed;
@@ -955,14 +1119,25 @@ public final class ChromiumProofScreen extends Screen {
         }
         switch (drag) {
             case MOVE -> {
+                if (tearing) {
+                    DesktopShell.handoffMove();
+                    return true;
+                }
+                if (!dragMoved && (Math.abs(x - pressShellX) >= DRAG_THRESHOLD || Math.abs(y - pressShellY) >= DRAG_THRESHOLD)) dragMoved = true;
                 if (session.maximized()) {
                     // Pulling a maximized window by its tab strip picks it up at its previous size, under the pointer.
-                    if (Math.abs(x - pressShellX) < 4 && Math.abs(y - pressShellY) < 4) return true;
+                    if (Math.abs(x - pressShellX) < DRAG_THRESHOLD && Math.abs(y - pressShellY) < DRAG_THRESHOLD) return true;
                     session.restoreUnderPointer((int) x, (int) y, shellW(), shellH());
                     grabX = (int) x - session.windowX();
                     grabY = (int) y - session.windowY();
+                } else if (dragMoved && session.snappedRect()) { // a snapped window is picked up at its free size
+                    session.restoreFromSnap((int) x, (int) y, shellW(), shellH());
+                    grabX = (int) x - session.windowX();
+                    grabY = (int) y - session.windowY();
                 }
+                if (dragMoved && outsideMinecraft(event.x(), event.y()) && tearOff()) return true;
                 session.moveTo((int) x - grabX, (int) y - grabY, shellW(), shellH());
+                if (dragMoved) updateSnapPreview((int) Math.round(x), (int) Math.round(y));
             }
             case RIGHT -> session.resizeTo((int) x - session.windowX() + 1, session.windowH(), shellW(), shellH());
             case BOTTOM -> session.resizeTo(session.windowW(), (int) y - session.windowY() + 1, shellW(), shellH());
@@ -992,6 +1167,15 @@ public final class ChromiumProofScreen extends Screen {
             return true;
         }
         Part over = hitAt(guiX, guiY).part();
+        if (isKeysPart(over)) { // the controls key map scrolls its lines
+            if (scrollY != 0) keysScroll = ControlList.clampScroll(keysScroll - (int) Math.signum(scrollY) * 3, keysLines.size(), session.layout().keysRows());
+            return true;
+        }
+        if (isMarkerPart(over)) { // the marker panel scrolls its list
+            if (scrollY != 0) markerScroll -= (int) Math.signum(scrollY);
+            clampMarkerScroll();
+            return true;
+        }
         if (isOverlay(over)) return true; // the zoom menu and find bar swallow the wheel
         // Ctrl+scroll over the shell (not the page, where it zooms the page) resizes the shell itself
         if (over != Part.CONTENT && over != Part.NONE && scrollY != 0 && ctrlDown()) {
@@ -1038,6 +1222,18 @@ public final class ChromiumProofScreen extends Screen {
                 returnKeyboardToPage();
             }
             case ZOOM_VALUE -> beginZoomEdit();
+            case MARKER_BUTTON -> {
+                toggleMarkerPanel();
+                if (markerPanelOpen) returnKeyboardToPage(); // the panel does not cost the page the keyboard
+            }
+            case KEYS_BUTTON -> {
+                toggleKeys();
+                returnKeyboardToPage(); // the panel does not cost the page the keyboard
+            }
+            case KEYS_CLOSE -> closeKeys();
+            case MARKER_ADD -> addMarker(false);
+            case MARKER_ROW -> openMarkerAt(hit.index(), ctrlDown()); // Ctrl+click: in a new tab
+            case MARKER_DELETE -> deleteMarkerAt(hit.index());
             case FIND_PREVIOUS -> runFind(false, true);
             case FIND_NEXT -> runFind(true, true);
             case FIND_CLOSE -> closeFind();
@@ -1116,6 +1312,83 @@ public final class ChromiumProofScreen extends Screen {
         closeZoomMenu();
     }
 
+    // ---- Phase 10: snapping inside the Minecraft window, and pulling the window out of it
+
+    /** The snap settings with the activation distance converted from screen pixels to shell units. */
+    private SnapSettings snapSettings() {
+        SnapSettings s = WikiConfig.snapSettings();
+        int activation = Math.max(SnapSettings.MIN_ACTIVATION, Math.round(s.activation() / (float) Math.max(1, unit())));
+        int speed = Math.max(1, Math.round(s.intentSpeed() / (float) Math.max(1, unit()))); // pixels per second -> shell units per second
+        return new SnapSettings(s.enabled(), activation, s.exitFactor(), s.preview(), s.fraction(), s.desktopWidth(), s.desktopHeight(), s.tearOffDistance(),
+                s.intentDelayMillis(), s.idleDelayMillis(), speed);
+    }
+
+    /** Which snap zone the pointer is in (measured against the Minecraft window), and the rectangle it would give: nothing moves yet. */
+    private void updateSnapPreview(int shellX, int shellY) {
+        SnapSettings s = snapSettings();
+        Box area = new Box(0, 0, shellW(), shellH());
+        showZone(snapIntent.update(area, shellX, shellY, System.currentTimeMillis(), s), area, s);
+    }
+
+    /** Time passing with the pointer held at an edge: the preview appears when the activation delay (see {@link SnapIntent}) is over. */
+    private void tickSnapPreview() {
+        if (!snapIntent.pending()) return;
+        SnapSettings s = snapSettings();
+        Box area = new Box(0, 0, shellW(), shellH());
+        showZone(snapIntent.tick(area, System.currentTimeMillis(), s), area, s);
+    }
+
+    private void showZone(SnapZone zone, Box area, SnapSettings s) {
+        snapZone = zone;
+        session.shell().preview(snapZone);
+        snapBox = snapZone.snapped() ? SnapEngine.target(area, snapZone, s) : null;
+    }
+
+    /** The button was released: a previewed zone becomes the window's rectangle (otherwise it stays where the pointer put it). */
+    private void commitSnap() {
+        if (snapZone.snapped() && snapBox != null) session.snapTo(snapBox, shellW(), shellH());
+        session.shell().commit();
+        snapZone = SnapZone.NONE;
+        snapIntent.reset();
+        snapBox = null;
+    }
+
+    /** The outline of where the window will snap (shell units; drawn under the shell's pose scale). Only while previewing. */
+    private void drawSnapPreview(GuiGraphicsExtractor g) {
+        if (snapBox == null || !session.shell().previewing() || !WikiConfig.SNAP_PREVIEW.get()) return;
+        int x0 = snapBox.x(), y0 = snapBox.y(), x1 = snapBox.right(), y1 = snapBox.bottom();
+        g.fill(x0, y0, x1, y1, SNAP_FILL);
+        g.fill(x0, y0, x1, y0 + 2, ACCENT);
+        g.fill(x0, y1 - 2, x1, y1, ACCENT);
+        g.fill(x0, y0, x0 + 2, y1, ACCENT);
+        g.fill(x1 - 2, y0, x1, y1, ACCENT);
+    }
+
+    private static final int SNAP_FILL = 0x554FA0FF;
+
+    /** The pointer (GUI units) is beyond the game window by more than the pull-out distance. */
+    private boolean outsideMinecraft(double guiX, double guiY) {
+        int d = WikiConfig.TEAR_OFF_DISTANCE.get();
+        return guiX < -d || guiY < -d || guiX > width + d || guiY > height + d;
+    }
+
+    /** Hands the window to the desktop, keeping the pointer's grab point; this screen then only waits for the release. */
+    private boolean tearOff() {
+        if (!DesktopShell.tearOff(grabX, grabY, session.windowW(), session.windowH(), session.unit())) return false;
+        tearing = true;
+        snapZone = SnapZone.NONE;
+        snapIntent.reset();
+        snapBox = null;
+        closeContextMenu();
+        return true;
+    }
+
+    /** "Move to desktop window": the window leaves Minecraft, centred on the monitor the game is on. */
+    private void popOut() {
+        if (DesktopShell.openCentered()) onClose();
+        else showStatus(Component.translatable("integratedntwiki.desktop.unavailable").getString() + " " + DesktopShell.failureReason());
+    }
+
     /** Minecraft's own full screen (what F11 does), including the option so it is remembered. */
     private void toggleFullScreen() {
         minecraft.getWindow().toggleFullScreen();
@@ -1149,6 +1422,7 @@ public final class ChromiumProofScreen extends Screen {
         boolean hasUrl = url != null && !url.isBlank();
         java.util.List<MenuItem> items = new java.util.ArrayList<>();
         items.add(item("tabNew", "Ctrl+T", !limit, () -> openNewTab(false)));
+        items.add(item("popOut", "", true, this::popOut));
         items.add(item("reload", "Ctrl+R", true, () -> target.browser().reload()));
         items.add(item("reloadAll", "", true, this::reloadAllTabs));
         items.add(item("copyPageUrl", "", hasUrl, () -> copyToClipboard(target.url())));
@@ -1228,8 +1502,12 @@ public final class ChromiumProofScreen extends Screen {
             items.add(item("reload", "F5", true, () -> tab.browser().reload()));
             items.add(separator());
             items.add(item(minecraft.getWindow().isFullscreen() ? "fullscreenExit" : "fullscreenEnter", "F11", true, this::toggleFullScreen));
+            items.add(item("popOut", "", true, this::popOut));
             items.add(item("copyAddress", "", tab.url() != null && !tab.url().isBlank(), () -> copyToClipboard(tab.url())));
             items.add(separator());
+        }
+        if (!r.editable()) { // a marker at the block that was right-clicked (the page recorded it; see MarkerScripts.CONTEXT_HOOK)
+            items.add(item("addMarker", WikiUrls.isTopLevelAllowed(tab.url()) && tab.errorText() == null, () -> addMarker(true)));
         }
         if (r.editable() || r.linkUrl() == null && r.imageUrl() == null) {
             items.add(item("selectAll", "Ctrl+A", true, () -> {
@@ -1242,6 +1520,315 @@ public final class ChromiumProofScreen extends Screen {
         menuTarget = null;
         menuTab = tab;
         showMenu(items, rightClickX, rightClickY);
+    }
+
+    // ---- markers (Phase 8.5)
+    //
+    // A marker is a saved place in a wiki page. The markers themselves live in MarkerStore / the mod config, not here: this
+    // screen only shows them. Nothing below keeps a marker in a tab; a tab only ever holds a transient "restore the position
+    // when the page has loaded" note (BrowserTab.pendingMarker), set by BrowserSession.openMarker.
+
+    private static MarkerStore markers() {
+        return MarkerStorage.get();
+    }
+
+    private static String marker(String key, Object... args) {
+        return Component.translatable("integratedntwiki.marker." + key, args).getString();
+    }
+
+    /** The panel's markers: those of the page being viewed first (top to bottom), then the rest in the order they were made. */
+    private java.util.List<Marker> markerList() {
+        BrowserTab tab = session.active();
+        return markers().ordered(tab == null ? null : tab.url());
+    }
+
+    /** Rows the open panel has (0 when closed), for hit-testing and drawing. */
+    private int markerRowCount() {
+        return markerPanelOpen ? session.layout().markerRows(markers().size()) : 0;
+    }
+
+    private void clampMarkerScroll() {
+        int size = markers().size();
+        markerScroll = Math.max(0, Math.min(markerScroll, Math.max(0, size - session.layout().markerRows(size))));
+    }
+
+    private void ensureMarkerVisible(String id) {
+        java.util.List<Marker> list = markerList();
+        int rows = session.layout().markerRows(list.size());
+        for (int i = 0; i < list.size(); i++) {
+            if (!list.get(i).id().equals(id)) continue;
+            if (i < markerScroll) markerScroll = i;
+            else if (i >= markerScroll + rows) markerScroll = i - rows + 1;
+        }
+        clampMarkerScroll();
+    }
+
+    private void toggleMarkerPanel() {
+        if (markerPanelOpen) closeMarkerPanel(true);
+        else openMarkerPanel(true);
+    }
+
+    /** @param reread read the saved markers again first (so a hand-edited config shows up); false right after a change made here */
+    private void openMarkerPanel(boolean reread) {
+        BrowserTab tab = session.active();
+        if (tab == null) return;
+        closeZoomMenu();
+        if (urlFocused) blurUrlField(false);
+        findFocused = false;
+        zoomEditing = false;
+        tab.input().cancelAutoscroll();
+        if (reread) markers().refresh();
+        markerTab = tab;
+        markerScroll = 0;
+        markerHighlight = null;
+        markerPanelOpen = true;
+    }
+
+    /** @param commit a name being typed is kept (true: clicking away, switching tabs, closing) rather than dropped */
+    private void closeMarkerPanel(boolean commit) {
+        if (markerRenameId != null) {
+            if (commit) commitMarkerRename();
+            else cancelMarkerRename();
+        }
+        if (!markerPanelOpen) return;
+        markerPanelOpen = false;
+        markerTab = null;
+        markerHighlight = null;
+        if (menuOpen && menuKind == MenuKind.MARKER) closeContextMenu();
+    }
+
+    private void beginMarkerRename(Marker m) {
+        BrowserTab tab = session.active();
+        if (urlFocused) blurUrlField(false);
+        findFocused = false;
+        zoomEditing = false;
+        markerRenameId = m.id();
+        markerText.setText(m.name());
+        markerText.selectAll();
+        caretBlinkStart = System.currentTimeMillis();
+        ensureMarkerVisible(m.id());
+        if (tab != null) {
+            tab.input().cancelAutoscroll();
+            tab.input().focusMinecraft();
+        }
+    }
+
+    private void commitMarkerRename() {
+        String id = markerRenameId;
+        if (id == null) return;
+        markerRenameId = null;
+        if (draggingField == markerText) draggingField = null;
+        String name = markerText.text();
+        if (!name.isBlank() && markers().find(id) != null && !name.strip().equals(markers().find(id).name())) {
+            markers().rename(id, name);
+            if (markers().lastSaveFailed()) showStatus(marker("saveFailed"));
+        }
+        returnKeyboardToPage();
+    }
+
+    private void cancelMarkerRename() {
+        markerRenameId = null;
+        if (draggingField == markerText) draggingField = null;
+        returnKeyboardToPage();
+    }
+
+    /** Where the name being edited is drawn (null when no visible row is being renamed). */
+    private Rect markerRenameRect() {
+        if (markerRenameId == null || !markerPanelOpen) return null;
+        ShellLayout layout = session.layout();
+        java.util.List<Marker> list = markerList();
+        int rows = layout.markerRows(list.size());
+        for (int i = 0; i < rows && markerScroll + i < list.size(); i++) {
+            if (!list.get(markerScroll + i).id().equals(markerRenameId)) continue;
+            Rect r = layout.markerRow(rows, i);
+            return new Rect(r.x() + 2, r.y() + 1, r.w() - 4, r.h() - 2);
+        }
+        return null;
+    }
+
+    /**
+     * Adds a marker at the top of the view (Ctrl+D, the panel's + button) or at the block that was right-clicked. The page
+     * itself says where it is ({@link MarkerScripts#captureBody}); the answer is checked against what the browser may open.
+     */
+    private void addMarker(boolean atRightClick) {
+        BrowserTab tab = session.active();
+        if (tab == null) return;
+        if (tab.errorText() != null || !WikiUrls.isTopLevelAllowed(tab.url())) {
+            showStatus(marker("noPosition")); // an error page or a page that is not a wiki page has no position to save
+            return;
+        }
+        MCEFBrowser browser = tab.browser();
+        PageQuery.ask(browser, browser.getMainFrame(), MarkerScripts.captureBody(atRightClick),
+                answer -> finishAddMarker(tab, answer), () -> showStatus(marker("noPosition")), PageQuery.SLOW_TIMEOUT_MILLIS);
+    }
+
+    private void finishAddMarker(BrowserTab tab, String answer) {
+        if (session.indexOf(tab) < 0) return; // the tab was closed while the page was answering
+        java.util.Map<String, String> fields = MarkerCodec.parseFields(answer);
+        MarkerStore.AddResult result = markers().add(fields.get("u"), MarkerCodec.position(fields), fields.getOrDefault("ti", ""), System.currentTimeMillis());
+        boolean here = session.active() == tab; // the panel is for the tab being looked at
+        switch (result.status()) {
+            case ADDED -> {
+                if (result.saved()) showNote(marker("added", result.marker().name()));
+                else showStatus(marker("saveFailed"));
+                if (here) { // like Chrome's "bookmark added": the name can be changed right away (Enter keeps it, Esc too)
+                    openMarkerPanel(false);
+                    beginMarkerRename(result.marker());
+                }
+            }
+            case DUPLICATE -> {
+                showNote(marker("duplicate", result.marker().name()));
+                if (here) {
+                    openMarkerPanel(false);
+                    markerHighlight = result.marker().id();
+                    ensureMarkerVisible(result.marker().id());
+                }
+            }
+            case FULL -> showStatus(marker("full", MarkerStore.MAX_MARKERS));
+            case UNAVAILABLE -> showStatus(marker("unavailable"));
+            case NO_ADDRESS -> showStatus(marker("noPosition"));
+        }
+    }
+
+    private void openMarkerAt(int visibleIndex, boolean inNewTab) {
+        java.util.List<Marker> list = markerList();
+        int i = markerScroll + visibleIndex;
+        if (i >= 0 && i < list.size()) openMarker(list.get(i), inNewTab);
+    }
+
+    private void openMarker(Marker m, boolean inNewTab) {
+        Rect c = session.layout().content();
+        leaveFields(); // closes the panel
+        switch (session.openMarker(m, inNewTab, c.w() * session.unit(), c.h() * session.unit())) {
+            case BLOCKED -> showStatus(marker("blocked"));
+            case TAB_LIMIT -> tabLimitMessage();
+            case NO_TAB -> { }
+            default -> returnKeyboardToPage();
+        }
+    }
+
+    private void deleteMarkerAt(int visibleIndex) {
+        java.util.List<Marker> list = markerList();
+        int i = markerScroll + visibleIndex;
+        if (i < 0 || i >= list.size()) return;
+        Marker m = list.get(i);
+        if (m.id().equals(markerRenameId)) cancelMarkerRename();
+        markers().delete(m.id());
+        if (m.id().equals(markerHighlight)) markerHighlight = null;
+        if (markers().lastSaveFailed()) showStatus(marker("saveFailed"));
+        else showNote(marker("deleted", m.name()));
+        clampMarkerScroll();
+    }
+
+    /** The menu of a marker row (right-click on it): the shell's own, like the tab menu. */
+    private void openMarkerMenu(int visibleIndex, double shellX, double shellY) {
+        java.util.List<Marker> list = markerList();
+        int i = markerScroll + visibleIndex;
+        if (i < 0 || i >= list.size()) return;
+        Marker m = list.get(i);
+        BrowserContextMenu.take(); // a page-menu request still waiting must not pop up over this menu
+        java.util.List<MenuItem> items = new java.util.ArrayList<>();
+        items.add(item("markerOpen", true, () -> openMarker(m, false)));
+        items.add(item("markerOpenTab", !session.tabLimitReached(), () -> openMarker(m, true)));
+        items.add(item("markerRename", true, () -> beginMarkerRename(m)));
+        items.add(separator());
+        items.add(item("markerDelete", true, () -> deleteMarkerAt(visibleIndex)));
+        menuKind = MenuKind.MARKER;
+        menuTab = null;
+        menuTarget = null;
+        showMenu(items, (int) shellX, (int) shellY);
+    }
+
+    // ---- controls key map
+
+    private void showKeys() {
+        closeZoomMenu();
+        closeMarkerPanel(true);
+        keysLines = ControlSource.lines(minecraft);
+        keysScroll = 0;
+        keysOpen = true;
+    }
+
+    private void closeKeys() {
+        keysOpen = false;
+    }
+
+    private void toggleKeys() {
+        if (keysOpen) closeKeys();
+        else showKeys();
+    }
+
+    private void drawKeysPanel(GuiGraphicsExtractor g, ShellLayout layout, Hit hover) {
+        Rect p = layout.keysPanel();
+        g.fill(p.x(), p.y(), p.right(), p.bottom(), EDGE);
+        g.fill(p.x() + 1, p.y() + 1, p.right() - 1, p.bottom() - 1, TAB_ACTIVE);
+        g.text(font, fit(ControlSource.labels().title(), p.w() - ShellLayout.KEYS_CELL - 14), p.x() + 6,
+                p.y() + (ShellLayout.KEYS_HEADER - font.lineHeight) / 2, TEXT, false);
+        overlayButton(g, layout.keysClose(), hover.part() == Part.KEYS_CLOSE, Part.KEYS_CLOSE, Icons.CLOSE);
+        int rows = layout.keysRows();
+        keysScroll = ControlList.clampScroll(keysScroll, keysLines.size(), rows);
+        Rect body = layout.keysBody();
+        int nameX = body.x() + 2, keysX = body.x() + body.w() * 30 / 100, noteX = body.x() + body.w() * 55 / 100;
+        for (int i = 0; i < rows && keysScroll + i < keysLines.size(); i++) {
+            ControlList.Line line = keysLines.get(keysScroll + i);
+            int y = body.y() + i * ShellLayout.KEYS_ROW + (ShellLayout.KEYS_ROW - font.lineHeight) / 2;
+            switch (line.type()) {
+                case HEADING -> g.text(font, fit(line.left(), body.w()), nameX, y, ACCENT, false);
+                case EMPTY -> g.text(font, fit(line.left(), body.w()), nameX, y, TEXT_DIM, false);
+                case ROW -> {
+                    boolean note = !line.note().isEmpty();
+                    int color = line.warn() ? WARN_COLOR : TEXT_DIM;
+                    g.text(font, fit(line.left(), keysX - nameX - 4), nameX, y, TEXT, false);
+                    g.text(font, fit(line.right(), (note ? noteX : body.right()) - keysX - 4), keysX, y, color, false);
+                    if (note) g.text(font, fit(line.note(), body.right() - noteX - 4), noteX, y, color, false);
+                }
+            }
+        }
+        if (keysLines.size() > rows) { // thin scroll thumb at the panel's right edge
+            int track = rows * ShellLayout.KEYS_ROW, thumb = Math.max(8, track * rows / keysLines.size());
+            int y = body.y() + (track - thumb) * keysScroll / Math.max(1, keysLines.size() - rows);
+            g.fill(p.right() - 3, y, p.right() - 1, y + thumb, TEXT_DIM);
+        }
+    }
+
+    private void drawMarkerPanel(GuiGraphicsExtractor g, ShellLayout layout, BrowserTab tab, Hit hover) {
+        java.util.List<Marker> list = markerList();
+        clampMarkerScroll();
+        int rows = layout.markerRows(list.size());
+        Rect p = layout.markerPanel(rows);
+        g.fill(p.x(), p.y(), p.right(), p.bottom(), EDGE);
+        g.fill(p.x() + 1, p.y() + 1, p.right() - 1, p.bottom() - 1, TAB_ACTIVE);
+        String title = fit(Component.translatable("integratedntwiki.markers.title", list.size()).getString(), p.w() - ShellLayout.MARKER_CELL - 14);
+        g.text(font, title, p.x() + 6, p.y() + (ShellLayout.MARKER_HEADER - font.lineHeight) / 2, TEXT, false);
+        overlayButton(g, layout.markerAdd(rows), hover.part() == Part.MARKER_ADD, Part.MARKER_ADD, Icons.PLUS);
+        if (list.isEmpty()) {
+            Rect r = layout.markerRow(rows, 0);
+            g.text(font, fit(Component.translatable("integratedntwiki.markers.empty").getString(), r.w() - 8), r.x() + 6, r.y() + (r.h() - font.lineHeight) / 2, TEXT_DIM, false);
+            return;
+        }
+        String here = MarkerCodec.canonicalUrl(tab.url());
+        for (int i = 0; i < rows && markerScroll + i < list.size(); i++) {
+            Marker m = list.get(markerScroll + i);
+            Rect r = layout.markerRow(rows, i);
+            boolean over = (hover.part() == Part.MARKER_ROW || hover.part() == Part.MARKER_DELETE) && hover.index() == i;
+            boolean renaming = m.id().equals(markerRenameId);
+            if (m.id().equals(markerHighlight)) g.fill(r.x(), r.y(), r.right(), r.bottom(), SELECTION);
+            else if (over && !renaming) g.fill(r.x(), r.y(), r.right(), r.bottom(), BUTTON_HOVER);
+            if (m.url().equals(here)) g.fill(r.x(), r.y() + 2, r.x() + 2, r.bottom() - 2, PIN_COLOR); // a marker of the page being viewed
+            if (renaming) {
+                drawField(g, new Rect(r.x() + 2, r.y() + 1, r.w() - 4, r.h() - 2), markerText, true, "");
+                continue;
+            }
+            g.text(font, fit(m.name(), r.w() - ShellLayout.MARKER_CELL - 10), r.x() + 6, r.y() + (r.h() - font.lineHeight) / 2, TEXT, false);
+            Rect del = layout.markerDelete(rows, i);
+            if (hover.part() == Part.MARKER_DELETE && hover.index() == i) g.fill(del.x(), del.y(), del.right(), del.bottom(), CLOSE_HOVER);
+            Icons.drawCentered(g, Icons.CLOSE, del.x(), del.y(), del.w(), del.h(), over ? TEXT : TEXT_DIM);
+        }
+        if (list.size() > rows) { // a thin scroll thumb at the panel's right edge
+            int track = rows * ShellLayout.MARKER_ROW, thumb = Math.max(8, track * rows / list.size());
+            int y = p.y() + ShellLayout.MARKER_HEADER + (track - thumb) * markerScroll / Math.max(1, list.size() - rows);
+            g.fill(p.right() - 3, y, p.right() - 1, y + thumb, TEXT_DIM);
+        }
     }
 
     private void drawContextMenu(GuiGraphicsExtractor g, int mouseX, int mouseY) {
@@ -1312,6 +1899,7 @@ public final class ChromiumProofScreen extends Screen {
     /** Before the active tab changes by keyboard: the shell's own fields and menus do not follow into the next tab. */
     private void leaveFields() {
         closeZoomMenu();
+        closeMarkerPanel(true);
         if (urlFocused) blurUrlField(false);
         findFocused = false;
     }
@@ -1344,6 +1932,21 @@ public final class ChromiumProofScreen extends Screen {
             return true;
         }
         // Shell shortcuts belong to Minecraft even while the page has the keyboard (never sent to the page).
+        if (WikiKeys.pressed(WikiKeys.OPEN_CHROMIUM_TEST, event)) { // F9 again: put the window away (the session and its tabs stay)
+            consumedKeys.add(key);
+            onClose();
+            return true;
+        }
+        if (WikiKeys.pressed(WikiKeys.OPEN_CONTROL_LIST, event)) { // the key map's own key shows / hides it
+            consumedKeys.add(key);
+            toggleKeys();
+            return true;
+        }
+        if (WikiKeys.pressed(WikiKeys.OPEN_DESKTOP_SHELL, event)) { // the window moves to the desktop (this screen closes, the session stays)
+            consumedKeys.add(key);
+            DesktopShell.launch();
+            return true;
+        }
         if (WikiKeys.pressed(WikiKeys.TOGGLE_URL_BAR, event)) {
             consumedKeys.add(key);
             toggleUrlBar();
@@ -1360,6 +1963,12 @@ public final class ChromiumProofScreen extends Screen {
         if (key == GLFW.GLFW_KEY_ESCAPE) {
             consumedKeys.add(key);
             escape(tab);
+            return true;
+        }
+        if (markerRenameId != null) { // naming a marker: Enter keeps the name (Esc is handled in escape())
+            caretBlinkStart = System.currentTimeMillis();
+            if (key == GLFW.GLFW_KEY_ENTER || key == GLFW.GLFW_KEY_KP_ENTER) commitMarkerRename();
+            else editKey(markerText, event);
             return true;
         }
         if (zoomEditing) {
@@ -1420,6 +2029,12 @@ public final class ChromiumProofScreen extends Screen {
     private void escape(BrowserTab tab) {
         if (tab.input().autoscrolling()) {
             tab.input().cancelAutoscroll();
+        } else if (keysOpen) {
+            closeKeys();
+        } else if (markerRenameId != null) { // Esc while naming: the marker keeps the name it has; the panel stays
+            cancelMarkerRename();
+        } else if (markerPanelOpen) {
+            closeMarkerPanel(true);
         } else if (zoomEditing) {
             zoomEditing = false;
             returnKeyboardToPage();
@@ -1492,6 +2107,15 @@ public final class ChromiumProofScreen extends Screen {
             case ZOOM_IN -> zoomStep(1);
             case ZOOM_OUT -> zoomStep(-1);
             case ZOOM_RESET -> zoomReset();
+            case ADD_MARKER -> {
+                leaveFields();
+                addMarker(false);
+            }
+            case TOGGLE_MARKERS -> {
+                boolean wasOpen = markerPanelOpen;
+                leaveFields();
+                if (!wasOpen) toggleMarkerPanel();
+            }
         }
     }
 
@@ -1531,6 +2155,11 @@ public final class ChromiumProofScreen extends Screen {
 
     @Override
     public boolean charTyped(CharacterEvent event) {
+        if (markerRenameId != null) {
+            if (markerText.text().length() < MarkerCodec.MAX_NAME) markerText.insert(new String(Character.toChars(event.codepoint())));
+            caretBlinkStart = System.currentTimeMillis();
+            return true;
+        }
         if (zoomEditing) {
             int cp = event.codepoint();
             if ((cp >= '0' && cp <= '9') || cp == '%') { // a zoom is a number
@@ -1565,11 +2194,17 @@ public final class ChromiumProofScreen extends Screen {
     /** Runs whenever the screen is replaced or closed. The browsers stay in the session unless it was disposed. */
     @Override
     public void removed() {
+        if (!tearing) session.shell().cancelDrag(); // a tear-off keeps its drag: the desktop window continues it
+        snapZone = SnapZone.NONE;
+        snapIntent.reset();
+        snapBox = null;
         urlFocused = false;
         draggingField = null;
         BrowserTab shown = session.active();
         if (shown != null) shown.input().cancelAutoscroll(); // nothing would end it while this screen receives no input
         if (findOpen && findTab != null && !findTab.browser().isClosed()) findTab.browser().stopFinding(false);
+        closeMarkerPanel(true);
+        keysOpen = false;
         findOpen = findFocused = zoomMenuOpen = zoomEditing = false;
         if (!disposed) {
             session.urlBar().dismissTemporary(); // a peeking bar does not survive minimizing; a pinned one does

@@ -20,6 +20,8 @@
 
 package com.levviata.integratedntwiki.mcef;
 
+import com.levviata.integratedntwiki.WikiLog;
+
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
@@ -116,37 +118,36 @@ public class MCEFDownloader {
         }
     }
 
+    /** A host that does not answer must not hold the browser's start-up: the checksum check gives up after this long and the runtime on disk is used. */
+    private static final int CONNECT_TIMEOUT_MS = 5_000, READ_TIMEOUT_MS = 15_000;
+
     private static void downloadFile(String urlString, File outputFile) throws IOException {
+        WikiLog.info(urlString + " -> " + outputFile.getCanonicalPath());
+        HttpURLConnection connection = null;
         try {
-            MCEF.getLogger().info(urlString + " -> " + outputFile.getCanonicalPath());
+            // One request: the connection that was checked is the one that is read (the old code opened a second one for the body)
+            connection = (HttpURLConnection) new URL(urlString).openConnection();
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(READ_TIMEOUT_MS);
+            int status = connection.getResponseCode();
+            if (status != 200) throw new IOException("HTTP " + status);
+            long fileSize = connection.getContentLengthLong();
 
-            URL url = new URL(urlString);
-            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
-
-            if (urlConnection.getResponseCode() != 200) {
-                throw new IOException();
+            try (InputStream in = new BufferedInputStream(connection.getInputStream(), 1 << 16);
+                 OutputStream out = new FileOutputStream(outputFile)) {
+                byte[] buffer = new byte[1 << 16];
+                int count;
+                long readBytes = 0;
+                while ((count = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, count);
+                    readBytes += count;
+                    if (fileSize > 0) MCEFDownloadListener.INSTANCE.setProgress((float) readBytes / fileSize);
+                }
             }
-
-            int fileSize = urlConnection.getContentLength();
-
-            BufferedInputStream inputStream = new BufferedInputStream(url.openStream());
-            FileOutputStream outputStream = new FileOutputStream(outputFile);
-
-            byte[] buffer = new byte[2048];
-            int count;
-            int readBytes = 0;
-            while ((count = inputStream.read(buffer)) != -1) {
-                outputStream.write(buffer, 0, count);
-                readBytes += count;
-                float percentComplete = (float) readBytes / fileSize;
-                MCEFDownloadListener.INSTANCE.setProgress(percentComplete);
-                buffer = new byte[Math.max(2048, inputStream.available())];
-            }
-
-            inputStream.close();
-            outputStream.close();
         } catch (IOException e) {
-            throw new IOException("Failed to download " + urlString);
+            throw new IOException("Failed to download " + urlString + ": " + e.getMessage(), e);
+        } finally {
+            if (connection != null) connection.disconnect();
         }
     }
 
