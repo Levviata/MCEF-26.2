@@ -40,7 +40,7 @@ public final class ClipboardBridge {
     }
 
     /** Puts plain text on the OS clipboard. @return false for empty text or when the clipboard refused it */
-    static boolean write(String text) {
+    public static boolean write(String text) {
         if (text == null || text.isEmpty()) return false;
         try {
             GLFW.glfwSetClipboardString(GLFW.glfwGetCurrentContext(), text.length() > MAX_CHARS ? text.substring(0, MAX_CHARS) : text);
