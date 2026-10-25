@@ -116,9 +116,26 @@ public final class MCEF {
         try {
             File platformDir = new File(FMLPaths.GAMEDIR.get().resolve("integratedntwiki-cef").resolve("libraries").toFile(),
                     MCEFPlatform.getPlatform().getNormalizedName());
-            if (runtimePresent(platformDir)) prepare();
+            if (runtimePresent(platformDir)) { warm = true; prepare(); }
         } catch (RuntimeException e) {
             WikiLog.warn("Could not check for an installed Chromium runtime: {}", e.toString());
+        }
+    }
+
+    private static volatile boolean warm;
+
+    /**
+     * Called every frame by the loader glue. Once the prewarm has made the runtime ready, starts Chromium itself (the render thread's
+     * ~4 second job) while the game is still on its title screen, instead of at the first key press: that start froze the game for
+     * seconds with nothing on screen, long enough for a second press, which closed the window that had just opened.
+     */
+    public static void warmTick() {
+        if (!warm || state != State.READY) return;
+        warm = false;
+        try {
+            initialize();
+        } catch (RuntimeException | LinkageError e) {
+            WikiLog.warn("Chromium could not be started ahead of time (it will start when the browser is opened): {}", e.toString());
         }
     }
 
