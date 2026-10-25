@@ -187,6 +187,7 @@ public final class MCEF {
             WikiBrowserSecurity.install(client.getHandle());
             client.addContextMenuHandler(new BrowserContextMenu());
             WikiLog.info("Chromium Embedded Framework initialized");
+            restoreLoginCookies();
 
             // These are important; the jcef process will linger around if not done. macOS is special.
             MCEFPlatform platform = MCEFPlatform.getPlatform();
@@ -204,6 +205,30 @@ public final class MCEF {
         fail();
         shutdown();
         return false;
+    }
+
+    /**
+     * Logs the player in again in Chromium: the login cookies saved by an earlier login (the cookie file in the user's data folder, if
+     * cookie caching is on) are handed to Chromium's cookie store before the first page loads. A cookie that expired is simply refused
+     * by the wiki; nothing here can fail the start-up.
+     */
+    private static void restoreLoginCookies() {
+        try {
+            java.util.List<com.levviata.integratedntwiki.wiki.WikiCookies.Cached> cached = com.levviata.integratedntwiki.wiki.WikiCookies.cached();
+            if (cached.isEmpty()) return;
+            org.cef.network.CefCookieManager manager = org.cef.network.CefCookieManager.getGlobalManager();
+            if (manager == null) return;
+            long now = System.currentTimeMillis();
+            java.util.Date created = new java.util.Date(now);
+            for (com.levviata.integratedntwiki.wiki.WikiCookies.Cached c : cached) {
+                java.util.Date expires = new java.util.Date(now + c.ageSeconds() * 1000L);
+                manager.setCookie("https://nucleartech.wiki/", new org.cef.network.CefCookie(c.name(), c.value(), "nucleartech.wiki", "/",
+                        true, true, created, created, true, expires));
+            }
+            WikiLog.info("Restored " + cached.size() + " cached wiki login cookies into Chromium");
+        } catch (RuntimeException | LinkageError e) {
+            WikiLog.warn("Could not restore the cached wiki login: " + e);
+        }
     }
 
     public static MCEFApp getApp() {
