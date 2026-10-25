@@ -116,7 +116,7 @@ public final class MCEF {
         try {
             File platformDir = new File(FMLPaths.GAMEDIR.get().resolve("integratedntwiki-cef").resolve("libraries").toFile(),
                     MCEFPlatform.getPlatform().getNormalizedName());
-            if (platformDir.isDirectory()) prepare();
+            if (runtimePresent(platformDir)) prepare();
         } catch (RuntimeException e) {
             WikiLog.warn("Could not check for an installed Chromium runtime: {}", e.toString());
         }
@@ -127,6 +127,19 @@ public final class MCEF {
         state = State.FAILED;
     }
 
+    /** True when the Chromium runtime's native library is under {@code dir} (jcef / libcef: .dll, .so, .dylib or the macOS framework). */
+    static boolean runtimePresent(File dir) {
+        if (dir == null || !dir.isDirectory()) return false;
+        try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(dir.toPath(), 4)) {
+            return files.anyMatch(f -> {
+                String n = String.valueOf(f.getFileName()).toLowerCase(java.util.Locale.ROOT);
+                return (n.contains("cef") && (n.endsWith(".dll") || n.endsWith(".so") || n.endsWith(".dylib"))) || n.equals("chromium embedded framework.framework");
+            });
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
     private static void download() {
         try {
             MCEFPlatform platform = MCEFPlatform.getPlatform();
@@ -134,15 +147,18 @@ public final class MCEF {
             File platformDir = new File(System.getProperty("jcef.path"));
 
             // Compare the remote checksum with the local one; a mismatch means the runtime must be re-downloaded.
+            // "Installed" means the runtime's native library is there, not just a folder: a first run that failed half way leaves an empty
+            // folder behind, and trusting it started the browser without a runtime (the window closed at once).
+            boolean installed = runtimePresent(platformDir);
             boolean download;
             try {
                 download = !downloader.downloadJavaCefChecksum();
             } catch (IOException e) {
-                if (!platformDir.exists()) throw e;
-                LOGGER.warn("Could not reach the CEF download host; using the runtime already on disk.");
+                if (!installed) throw e;
+                LOGGER.warn("Could not reach the CEF download host (" + (e.getCause() != null ? e.getCause() : e) + "); using the runtime already on disk.");
                 download = false;
             }
-            download |= !platformDir.exists();
+            download |= !installed;
 
             if (download) {
                 downloader.downloadJavaCefBuild();
