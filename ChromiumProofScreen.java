@@ -20,6 +20,7 @@ import com.levviata.integratedntwiki.shell.MarkerCodec;
 import com.levviata.integratedntwiki.shell.MarkerScripts;
 import com.levviata.integratedntwiki.shell.MarkerStore;
 import com.levviata.integratedntwiki.shell.PageKeys;
+import com.levviata.integratedntwiki.shell.Tooltips;
 import com.levviata.integratedntwiki.shell.ShellLayout;
 import com.levviata.integratedntwiki.shell.ShellLayout.Hit;
 import com.levviata.integratedntwiki.shell.ShellLayout.Part;
@@ -455,6 +456,60 @@ public final class ChromiumProofScreen extends Screen {
         g.fill(rx - 3, by - 3, rx - 1, by - 1, TEXT_DIM);
         g.fill(rx - 6, by - 3, rx - 4, by - 1, TEXT_DIM);
         g.fill(rx - 3, by - 6, rx - 1, by - 4, TEXT_DIM);
+
+        drawTooltip(g, layout, active, hover, mouseX, mouseY);
+    }
+
+    // ---- tooltips (the texts and what they belong to are shell/Tooltips; the Swing desktop window shows the same ones)
+
+    private Hit tipHit = Hit.NONE;
+    private int tipRow = -1;
+    private long tipSince;
+
+    /** A translated tooltip text, or null when the language file has no such key (a raw key must never be printed). */
+    private static String tip(String key) {
+        if (key == null) return null;
+        String text = Component.translatable(key).getString();
+        return text.equals(key) ? null : text;
+    }
+
+    /** The tooltip for what the pointer rests on, after {@link Tooltips#DELAY_MS}; none while a menu, a drag or a key rebind is going on. */
+    private void drawTooltip(GuiGraphicsExtractor g, ShellLayout layout, BrowserTab active, Hit hover, int mx, int my) {
+        int row = hover.part() == Part.KEYS_PANEL ? KeyRebind.lineAt(my, layout.keysBody().y(), ShellLayout.KEYS_ROW, keysScroll, keysLines.size()) : -1;
+        long now = System.currentTimeMillis();
+        if (!hover.equals(tipHit) || row != tipRow) { tipHit = hover; tipRow = row; tipSince = now; }
+        if (menuOpen || drag != Drag.NONE || rebindId != null || now - tipSince < Tooltips.DELAY_MS) return;
+        String text = null;
+        switch (hover.part()) {
+            case TAB -> { if (hover.index() >= 0 && hover.index() < session.tabCount()) text = session.tab(hover.index()).displayTitle(); }
+            case KEYS_PANEL -> {
+                ControlList.Line line = row < 0 ? null : keysLines.get(row);
+                text = tip(Tooltips.rowKey(line));
+                if (text != null && line.warn() && !line.note().isEmpty()) text += "\n" + line.note(); // a clash: say with what
+                if (text != null && Tooltips.rebindHint(line)) { String h = tip(Tooltips.REBIND_KEY); if (h != null) text += "\n" + h; }
+            }
+            default -> {
+                boolean flag = switch (hover.part()) {
+                    case MAXIMIZE -> session.maximized();
+                    case RELOAD -> active.loading();
+                    case URL_BUTTON -> session.urlBar().pinned();
+                    default -> false;
+                };
+                text = tip(Tooltips.partKey(hover.part(), flag));
+            }
+        }
+        if (text == null || text.isEmpty()) return;
+        Rect win = layout.window();
+        java.util.List<String> lines = Tooltips.wrap(text, Math.max(60, Math.min(220, win.w() - 16)), font::width);
+        int w = 0;
+        for (String l : lines) w = Math.max(w, font.width(l));
+        w += 8;
+        int h = lines.size() * (font.lineHeight + 1) + 5;
+        int x = Math.max(win.x() + 2, Math.min(mx + 8, win.right() - w - 2));
+        int y = my + 18 + h > win.bottom() ? Math.max(win.y() + 2, my - h - 4) : my + 18;
+        g.fill(x, y, x + w, y + h, EDGE);
+        g.fill(x + 1, y + 1, x + w - 1, y + h - 1, TAB_BAR_BG);
+        for (int i = 0; i < lines.size(); i++) g.text(font, lines.get(i), x + 4, y + 3 + i * (font.lineHeight + 1), TEXT, false);
     }
 
     private void drawUrlField(GuiGraphicsExtractor g, ShellLayout layout) {
