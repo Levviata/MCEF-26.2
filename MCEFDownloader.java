@@ -121,7 +121,53 @@ public class MCEFDownloader {
     /** A host that does not answer must not hold the browser's start-up: the checksum check gives up after this long and the runtime on disk is used. */
     private static final int CONNECT_TIMEOUT_MS = 5_000, READ_TIMEOUT_MS = 15_000;
 
+    private static final String USER_AGENT = "IntegratedNTWiki-MCEF/1.0 (Minecraft mod; +https://github.com/Levviata/integratedntwiki)";
+
+    /**
+     * Java first; when that fails (the host answers HTTP 403 to Java 8's TLS stack on Forge 1.7.10 although every newer Java is fine, so
+     * it is not the file or the commit) the system's own {@code curl} is tried, which Windows 10+, macOS and most Linux systems have.
+     */
     private static void downloadFile(String urlString, File outputFile) throws IOException {
+        try {
+            downloadWithJava(urlString, outputFile);
+        } catch (IOException first) {
+            WikiLog.warn("Java could not download " + urlString + " (" + first.getMessage() + "); trying curl");
+            try {
+                downloadWithCurl(urlString, outputFile);
+            } catch (IOException second) {
+                first.addSuppressed(second);
+                throw new IOException(first.getMessage() + " (curl: " + second.getMessage() + ")", first);
+            }
+        }
+    }
+
+    private static void downloadWithCurl(String urlString, File outputFile) throws IOException {
+        String curl = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")
+                ? System.getenv("SystemRoot") + "\\System32\\curl.exe" : "curl";
+        ProcessBuilder pb = new ProcessBuilder(curl, "--fail", "--silent", "--show-error", "--location", "--max-time", "900",
+                "--connect-timeout", "15", "-A", USER_AGENT, "-o", outputFile.getAbsolutePath(), urlString);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        StringBuilder out = new StringBuilder();
+        try (InputStream in = process.getInputStream()) {
+            byte[] buffer = new byte[1024];
+            int n;
+            while ((n = in.read(buffer)) != -1 && out.length() < 400) out.append(new String(buffer, 0, n));
+        }
+        try {
+            if (process.waitFor() != 0) {
+                outputFile.delete();
+                throw new IOException("exit " + process.exitValue() + " " + out.toString().trim());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            process.destroy();
+            throw new IOException("interrupted");
+        }
+        MCEFDownloadListener.INSTANCE.setProgress(1F);
+    }
+
+    private static void downloadWithJava(String urlString, File outputFile) throws IOException {
         WikiLog.info(urlString + " -> " + outputFile.getCanonicalPath());
         HttpURLConnection connection = null;
         try {
