@@ -99,7 +99,8 @@ public class MCEFDownloader {
                 MCEF.getLogger().warn("JCEF Hash does not match.");
             }
         } else {
-            MCEF.getLogger().warn("Failed to download JCEF hash.");
+            // Not a failure: there is simply no stored checksum yet (first run, or the libraries folder was cleared), so JCEF is downloaded.
+            MCEF.getLogger().info("No stored JCEF checksum yet (first run): JCEF will be downloaded.");
         }
 
         jcefBuildHashFileTemp.renameTo(jcefBuildHashFile);
