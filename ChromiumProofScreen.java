@@ -11,6 +11,7 @@ import com.levviata.integratedntwiki.shell.BrowserSession;
 import com.levviata.integratedntwiki.shell.BrowserTab;
 import com.levviata.integratedntwiki.shell.ControlList;
 import com.levviata.integratedntwiki.shell.ControlSource;
+import com.levviata.integratedntwiki.shell.KeyRebind;
 import com.levviata.integratedntwiki.shell.Favicons;
 import com.levviata.integratedntwiki.shell.Icons;
 import com.levviata.integratedntwiki.shell.LoadErrors;
@@ -129,6 +130,8 @@ public final class ChromiumProofScreen extends Screen {
     // Controls key map ([Keys] button / openControlList key): lines read from the game when it opens, scrolled by whole lines.
     private boolean keysOpen, openKeys;
     private int keysScroll;
+    /** The mapping waiting for its new key (a click on its row started it), or null. */
+    private String rebindId;
     private java.util.List<ControlList.Line> keysLines = java.util.List.of();
 
     // Zoom menu (Phase 6): "[-  100%  +  [Reset]]". Clicking the percentage turns it into a field to type a zoom into.
@@ -1027,6 +1030,10 @@ public final class ChromiumProofScreen extends Screen {
         if (findFocused && hit.part() != Part.FIND_FIELD) findFocused = false;
         tab.input().focusMinecraft(); // clicking anything that is not the page takes the keyboard from it
         if (hit.part() == Part.NONE) return true;
+        if (hit.part() == Part.KEYS_PANEL) { // a key mapping's row: the next key pressed becomes its key
+            if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT) clickKeysRow((int) y);
+            return true;
+        }
         if (hit.part() == Part.URL_FIELD) {
             if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT) clickUrlField(x, doubleClick);
             return true;
@@ -1751,6 +1758,31 @@ public final class ChromiumProofScreen extends Screen {
 
     private void closeKeys() {
         keysOpen = false;
+        rebindId = null;
+    }
+
+    private void clickKeysRow(int y) {
+        ShellLayout layout = session.layout();
+        int i = KeyRebind.lineAt(y, layout.keysBody().y(), ShellLayout.KEYS_ROW, keysScroll, keysLines.size());
+        ControlList.Line line = i < 0 ? null : keysLines.get(i);
+        rebindId = line != null && line.rebindable() ? line.id() : null;
+    }
+
+    /** A key press while a mapping waits for its key (NeoForge's Key Binds rules: modifiers held count, Esc unbinds). */
+    private boolean rebindKey(KeyEvent event) {
+        KeyRebind.Outcome o = KeyRebind.onKey(event.key(), keyMods(event.modifiers()));
+        if (o.kind() == KeyRebind.Kind.WAIT) return true;
+        String id = rebindId;
+        rebindId = null;
+        ControlSource.rebind(minecraft, id, o.key(), o.mods());
+        keysLines = ControlSource.lines(minecraft);
+        return true;
+    }
+
+    private static int keyMods(int glfwMods) {
+        return ((glfwMods & GLFW.GLFW_MOD_SHIFT) != 0 ? KeyRebind.MOD_SHIFT : 0)
+                | ((glfwMods & GLFW.GLFW_MOD_CONTROL) != 0 ? KeyRebind.MOD_CONTROL : 0)
+                | ((glfwMods & GLFW.GLFW_MOD_ALT) != 0 ? KeyRebind.MOD_ALT : 0);
     }
 
     private void toggleKeys() {
@@ -1779,7 +1811,9 @@ public final class ChromiumProofScreen extends Screen {
                     boolean note = !line.note().isEmpty();
                     int color = line.warn() ? WARN_COLOR : TEXT_DIM;
                     g.text(font, fit(line.left(), keysX - nameX - 4), nameX, y, TEXT, false);
-                    g.text(font, fit(line.right(), (note ? noteX : body.right()) - keysX - 4), keysX, y, color, false);
+                    boolean waiting = line.rebindable() && line.id().equals(rebindId);
+                    String keyText = waiting ? Component.translatable("integratedntwiki.keys.press").getString() : line.right();
+                    g.text(font, fit(keyText, (note ? noteX : body.right()) - keysX - 4), keysX, y, waiting ? ACCENT : color, false);
                     if (note) g.text(font, fit(line.note(), body.right() - noteX - 4), noteX, y, color, false);
                 }
             }
@@ -1917,6 +1951,10 @@ public final class ChromiumProofScreen extends Screen {
     public boolean keyPressed(KeyEvent event) {
         int key = event.key();
         BrowserTab tab = session.active();
+        if (keysOpen && rebindId != null) { // the next key is the new key: Esc unbinds, it does not close the panel
+            consumedKeys.add(key);
+            return rebindKey(event);
+        }
         if (menuOpen) { // any key closes the context menu; Esc is only that
             closeContextMenu();
             if (key == GLFW.GLFW_KEY_ESCAPE) {
