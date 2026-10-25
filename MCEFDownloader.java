@@ -174,6 +174,9 @@ public class MCEFDownloader {
             // One request: the connection that was checked is the one that is read (the old code opened a second one for the body)
             connection = (HttpURLConnection) new URL(urlString).openConnection();
             connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            // The host's bot filter answers HTTP 403 to Java's default "Java/1.8.0_x" agent (seen on Forge 1.7.10): identify as the mod instead.
+            connection.setRequestProperty("User-Agent", "IntegratedNTWiki-MCEF/1.0 (Minecraft mod; +https://github.com/Levviata/integratedntwiki)");
+            connection.setRequestProperty("Accept", "*/*");
             connection.setReadTimeout(READ_TIMEOUT_MS);
             int status = connection.getResponseCode();
             if (status != 200) throw new IOException("HTTP " + status);
