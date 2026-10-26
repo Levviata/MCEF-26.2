@@ -36,6 +36,7 @@ import com.levviata.integratedntwiki.shell.desktop.SnapEngine;
 import com.levviata.integratedntwiki.shell.desktop.SnapIntent;
 import com.levviata.integratedntwiki.shell.desktop.SnapSettings;
 import com.levviata.integratedntwiki.shell.desktop.SnapZone;
+import com.levviata.integratedntwiki.shell.WindowResize;
 import com.levviata.integratedntwiki.shell.Zoom;
 import java.util.HashSet;
 import java.util.OptionalInt;
@@ -48,6 +49,7 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import org.cef.misc.CefCursorType;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -87,7 +89,7 @@ public final class ChromiumProofScreen extends Screen {
             "data:text/html,<h1>not allowed</h1>"
     };
 
-    private enum Drag { NONE, MOVE, RIGHT, BOTTOM, CORNER, TAB }
+    private enum Drag { NONE, MOVE, RESIZE, TAB }
 
     private final Screen parent;
     private BrowserSession session;
@@ -95,6 +97,15 @@ public final class ChromiumProofScreen extends Screen {
     private Drag drag = Drag.NONE;
     /** Index of the tab being dragged to a new position (Drag.TAB). */
     private int dragTab = -1;
+    /**
+     * A resize in progress (Drag.RESIZE): which edges follow the pointer ({@link WindowResize} bits), the window as it was when the
+     * button went down, and where the pointer was then (shell units). The window is resized by the pointer's movement since then, so
+     * the opposite edges never move and pressing a pixel or two inside the frame does not make the window jump.
+     */
+    private int resizeEdges, resizePressX, resizePressY;
+    private Box resizeStart;
+    /** The edges whose resize cursor is showing (0: none), so the cursor is only set when it changes. */
+    private int cursorEdges;
 
     // Context menu (Phase 8): Chromium says when and about what (BrowserContextMenu); the shell draws it.
     /** A menu row. {@code label == null} is a separator line. {@code shortcut} is shown right-aligned, as a hint. */
@@ -451,7 +462,7 @@ public final class ChromiumProofScreen extends Screen {
 
         if (menuOpen) drawContextMenu(g, mouseX, mouseY);
 
-        // resize grip in the frame corner
+        // resize grip in the frame corner (every edge and corner resizes; the grip only marks that the window can be)
         int rx = win.right(), by = win.bottom();
         g.fill(rx - 3, by - 3, rx - 1, by - 1, TEXT_DIM);
         g.fill(rx - 6, by - 3, rx - 4, by - 1, TEXT_DIM);
@@ -1009,6 +1020,40 @@ public final class ChromiumProofScreen extends Screen {
                 tab.browser().getCursorChangeListener().onCursorChange(0); // arrow over the shell
             }
         }
+        updateResizeCursor(tab, guiX, guiY);
+    }
+
+    /**
+     * The resize cursor over the window's frame: horizontal on the left and right edges, vertical on the top and bottom, a diagonal on
+     * the corners. Leaving the frame puts back what belongs there (the page's cursor over the page, the arrow elsewhere). It is only
+     * touched when the edge set changes, so Chromium's own cursor handling over the page is left alone.
+     */
+    private void updateResizeCursor(BrowserTab tab, double guiX, double guiY) {
+        int edges = session.layout().resizeEdges(toShell(guiX), toShell(guiY));
+        if (edges == cursorEdges) return;
+        cursorEdges = edges;
+        if (edges != WindowResize.NONE) tab.browser().setCursor(resizeCursor(edges));
+        else if (overContent) tab.browser().restoreCursor();
+        else tab.browser().getCursorChangeListener().onCursorChange(0);
+    }
+
+    private static CefCursorType resizeCursor(int edges) {
+        return switch (WindowResize.shape(edges)) {
+            case HORIZONTAL -> CefCursorType.EAST_WEST_RESIZE;
+            case VERTICAL -> CefCursorType.NORTH_SOUTH_RESIZE;
+            case DIAGONAL_NW_SE -> CefCursorType.NORTH_WEST_SOUTH_EAST_RESIZE;
+            case DIAGONAL_NE_SW -> CefCursorType.NORTH_EAST_SOUTH_WEST_RESIZE;
+            default -> CefCursorType.POINTER;
+        };
+    }
+
+    /** The left button went down on the frame: remember the window and the pointer, and resize by the pointer's movement from here. */
+    private void beginResize(int edges, double shellX, double shellY) {
+        drag = Drag.RESIZE;
+        resizeEdges = edges;
+        resizeStart = session.windowBox();
+        resizePressX = (int) shellX;
+        resizePressY = (int) shellY;
     }
 
     @Override
@@ -1130,9 +1175,8 @@ public final class ChromiumProofScreen extends Screen {
                     grabX = (int) x - session.windowX();
                     grabY = (int) y - session.windowY();
                 }
-                case EDGE_RIGHT -> drag = Drag.RIGHT;
-                case EDGE_BOTTOM -> drag = Drag.BOTTOM;
-                case CORNER -> drag = Drag.CORNER;
+                case EDGE_LEFT, EDGE_TOP, EDGE_RIGHT, EDGE_BOTTOM, CORNER, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, CORNER_BOTTOM_LEFT ->
+                        beginResize(hit.part().resizeEdges(), x, y);
                 default -> { }
             }
         } else if (button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE && hit.part() == Part.TAB) {
@@ -1201,9 +1245,9 @@ public final class ChromiumProofScreen extends Screen {
                 session.moveTo((int) x - grabX, (int) y - grabY, shellW(), shellH());
                 if (dragMoved) updateSnapPreview((int) Math.round(x), (int) Math.round(y));
             }
-            case RIGHT -> session.resizeTo((int) x - session.windowX() + 1, session.windowH(), shellW(), shellH());
-            case BOTTOM -> session.resizeTo(session.windowW(), (int) y - session.windowY() + 1, shellW(), shellH());
-            case CORNER -> session.resizeTo((int) x - session.windowX() + 1, (int) y - session.windowY() + 1, shellW(), shellH());
+            case RESIZE -> {
+                if (resizeStart != null) session.resizeFrom(resizeStart, resizeEdges, (int) x - resizePressX, (int) y - resizePressY, shellW(), shellH());
+            }
             case TAB -> {
                 ShellLayout l = session.layout();
                 int target = (int) Math.floor((x - l.tab(0).x()) / (double) l.tabWidth());
@@ -2288,6 +2332,10 @@ public final class ChromiumProofScreen extends Screen {
     @Override
     public void removed() {
         if (!tearing) session.shell().cancelDrag(); // a tear-off keeps its drag: the desktop window continues it
+        if (cursorEdges != WindowResize.NONE) { // the resize cursor must not outlive the screen
+            cursorEdges = WindowResize.NONE;
+            GLFW.glfwSetCursor(GLFW.glfwGetCurrentContext(), 0L);
+        }
         snapZone = SnapZone.NONE;
         snapIntent.reset();
         snapBox = null;
