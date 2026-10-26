@@ -137,6 +137,25 @@ public final class MCEF {
      * ~4 second job) while the game is still on its title screen, instead of at the first key press: that start froze the game for
      * seconds with nothing on screen, long enough for a second press, which closed the window that had just opened.
      */
+    /**
+     * For a loader that can run it while the game is still loading (Forge 1.7.10's post-init, behind the loading bar): the prewarm
+     * and Chromium's own start-up, waiting at most {@code maxWaitMs} for the runtime check. Chromium's start takes seconds on the thread
+     * that renders, so it belongs where a pause is not noticed; after the loading bar the title screen would be frozen instead.
+     */
+    public static void prewarmNow(long maxWaitMs) {
+        prewarm();
+        long end = System.currentTimeMillis() + maxWaitMs;
+        while (state == State.DOWNLOADING && System.currentTimeMillis() < end) {
+            try {
+                Thread.sleep(25);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        warmTick(); // READY: Chromium starts here; otherwise the per-frame warmTick starts it as soon as the check is done
+    }
+
     public static void warmTick() {
         if (!warm || state != State.READY) return;
         warm = false;
