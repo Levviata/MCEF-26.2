@@ -215,7 +215,8 @@ public class MCEFDownloader {
                     continue;
                 }
 
-                File outputFile = new File(outputDirectory, entry.getName());
+                // Never write outside the target folder, whatever the archive says
+                File outputFile = ArchiveSupport.resolveInside(outputDirectory.toPath(), entry.getName()).toFile();
                 outputFile.getParentFile().mkdirs();
 
                 try (OutputStream outputStream = new FileOutputStream(outputFile)) {
@@ -229,6 +230,8 @@ public class MCEFDownloader {
                         buffer = new byte[Math.max(4096, tarInput.available())];
                     }
                 }
+                // Restore the executable bit the archive carries (jcef_helper, the macOS jcef Helper*.app binaries); FileOutputStream drops it
+                ArchiveSupport.applyMode(outputFile.toPath(), entry.getMode());
             }
         } catch (IOException e) {
             MCEF.getLogger().error("Failed to extract gzip file to " + outputDirectory, e);
