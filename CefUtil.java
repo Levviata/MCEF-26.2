@@ -67,7 +67,9 @@ final class CefUtil {
             setUnixExecutable(jcefHelperFile);
         } else if (platform.isMacOS()) {
             File mcefLibrariesPath = new File(System.getProperty("mcef.libraries.path"));
-            for (String helper : new String[]{"jcef Helper", "jcef Helper (GPU)", "jcef Helper (Plugin)", "jcef Helper (Renderer)"}) {
+            // The archive also has "jcef Helper (Alerts)". ArchiveSupport restores the modes on extraction; this is the fallback for a runtime
+            // an older version of the mod unpacked (its files have no executable bit).
+            for (String helper : new String[]{"jcef Helper", "jcef Helper (GPU)", "jcef Helper (Plugin)", "jcef Helper (Renderer)", "jcef Helper (Alerts)"}) {
                 setUnixExecutable(new File(mcefLibrariesPath, platform.getNormalizedName()
                         + "/jcef_app.app/Contents/Frameworks/" + helper + ".app/Contents/MacOS/" + helper));
             }

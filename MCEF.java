@@ -94,6 +94,14 @@ public final class MCEF {
         if (state != State.IDLE) return;
         state = State.DOWNLOADING;
         try {
+            if (!MCEFPlatform.getPlatform().hasMatchingNatives()) {
+                // A 128 MB download that can never load is worse than saying so: see MCEFPlatform#hasMatchingNatives
+                LOGGER.error("No Chromium runtime is available for {}: the published build for this platform contains x86-64 binaries. "
+                        + "The wiki browser is disabled here. (-Dintegratedntwiki.allowUnverifiedNatives=true tries the download anyway.)",
+                        MCEFPlatform.getPlatform().getNormalizedName());
+                fail();
+                return;
+            }
             File libraries = FMLPaths.GAMEDIR.get().resolve("integratedntwiki-cef").resolve("libraries").toFile();
             libraries.mkdirs();
             System.setProperty("mcef.libraries.path", libraries.getCanonicalPath());
