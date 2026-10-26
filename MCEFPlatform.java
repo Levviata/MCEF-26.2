@@ -46,6 +46,15 @@ public enum MCEFPlatform {
         return (this == MACOS_AMD64 || this == MACOS_ARM64);
     }
 
+    /**
+     * Whether the published runtime for this platform really contains binaries for it. The CinemaMod host's {@code linux_arm64} and
+     * {@code windows_arm64} archives (checked for the commit in gradle.properties) hold x86-64 programs: they cannot load on an ARM64 JVM.
+     * {@code -Dintegratedntwiki.allowUnverifiedNatives=true} skips the check, for a mirror or commit that fixes this.
+     */
+    public boolean hasMatchingNatives() {
+        return !(this == LINUX_ARM64 || this == WINDOWS_ARM64) || Boolean.getBoolean("integratedntwiki.allowUnverifiedNatives");
+    }
+
     public static MCEFPlatform getPlatform() {
         String os = System.getProperty("os.name").toLowerCase(Locale.US);
         String arch = System.getProperty("os.arch").toLowerCase(Locale.US);
