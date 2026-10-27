@@ -403,7 +403,8 @@ public final class ChromiumProofScreen extends Screen {
         // tab bar
         Rect bar = layout.tabBar();
         g.fill(bar.x(), bar.y(), bar.right(), bar.bottom(), TAB_BAR_BG);
-        for (int i = 0; i < session.tabCount(); i++) drawTab(g, layout, i, hover);
+        for (int i = 0; i < session.tabCount(); i++) if (layout.tabVisible(i)) drawTab(g, layout, i, hover);
+        if (layout.tabsOverflow()) button(g, layout.tabListButton(), hover.part() == Part.TAB_LIST, Part.TAB_LIST, true, Icons.CHEVRON_DOWN, false);
         button(g, layout.newTabButton(), hover.part() == Part.NEW_TAB, Part.NEW_TAB, true, Icons.PLUS, false);
         button(g, layout.minimizeButton(), hover.part() == Part.MINIMIZE, Part.MINIMIZE, true, Icons.MINIMIZE, false);
         button(g, layout.maximizeButton(), hover.part() == Part.MAXIMIZE, Part.MAXIMIZE, true, session.maximized() ? Icons.RESTORE : Icons.MAXIMIZE, false);
@@ -1251,8 +1252,9 @@ public final class ChromiumProofScreen extends Screen {
             }
             case TAB -> {
                 ShellLayout l = session.layout();
-                int target = (int) Math.floor((x - l.tab(0).x()) / (double) l.tabWidth());
-                target = Math.max(0, Math.min(target, session.tabCount() - 1));
+                int first = l.firstVisibleTab();
+                int target = first + (int) Math.floor((x - l.tab(first).x()) / (double) l.tabWidth());
+                target = Math.max(first, Math.min(target, first + l.visibleTabs() - 1));
                 if (dragTab >= 0 && dragTab < session.tabCount() && target != dragTab) {
                     BrowserTab dragged = session.tab(dragTab);
                     session.moveTab(dragTab, target); // pinned and unpinned tabs keep to their own group
@@ -1310,6 +1312,7 @@ public final class ChromiumProofScreen extends Screen {
                 else closeTabAt(hit.index());
             }
             case NEW_TAB -> openNewTab(false);
+            case TAB_LIST -> openTabList();
             case URL_BUTTON -> toggleUrlBar();
             // the zoom menu must not cost the page the keyboard: it goes straight back unless the value is being typed
             case ZOOM_BUTTON -> {
@@ -1514,6 +1517,26 @@ public final class ChromiumProofScreen extends Screen {
             if (session.tabLimitReached()) tabLimitMessage();
             else showStatus(Component.translatable("integratedntwiki.tabs.noneClosed").getString());
         }
+    }
+
+    /** The list of every open tab (the button a crowded tab strip ends in): choosing a row selects that tab; the active one has a dot. */
+    private void openTabList() {
+        if (session.tabCount() == 0) return;
+        BrowserContextMenu.take();
+        leaveFields();
+        java.util.List<MenuItem> items = new java.util.ArrayList<>();
+        for (int i = 0; i < session.tabCount(); i++) {
+            final int index = i;
+            String title = session.tab(i).displayTitle();
+            if (title == null || title.isBlank()) title = Component.translatable("integratedntwiki.browser.newTab").getString();
+            title = fit(title, 220);
+            items.add(new MenuItem((i == session.activeIndex() ? "\u2022 " : "   ") + title, "", true, () -> session.select(index)));
+        }
+        Rect b = session.layout().tabListButton();
+        menuKind = MenuKind.TAB;
+        menuTab = null;
+        menuTarget = session.active();
+        showMenu(items, b.x(), b.bottom() + 1);
     }
 
     /** The menu of a tab (right-click on it): the shell's own, never Chromium's. Acts on the right-clicked tab. */
