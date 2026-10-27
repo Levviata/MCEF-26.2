@@ -127,10 +127,16 @@ public class MCEFDownloader {
      * the game never extracts (and loads) a native library it cannot vouch for. The upstream archive keeps its old behaviour.
      */
     private void verifyArchive(File archive) throws IOException {
-        File checksum = new File(archive.getParentFile(), platform.getNormalizedName() + ".tar.gz.sha256"); // downloadJavaCefChecksum left the published one here
-        String expected = checksum.exists()
-                ? java.nio.file.Files.readString(checksum.toPath(), java.nio.charset.StandardCharsets.UTF_8).trim().split("\\s+")[0].toLowerCase(java.util.Locale.ROOT)
-                : "";
+        // Fetch the published checksum fresh instead of trusting whatever an earlier run left on disk
+        File checksum = new File(archive.getParentFile(), platform.getNormalizedName() + ".tar.gz.sha256.verify");
+        String expected = "";
+        try {
+            downloadFile(getJavaCefChecksumDownloadUrl(), checksum);
+            String text = java.nio.file.Files.readString(checksum.toPath(), java.nio.charset.StandardCharsets.UTF_8).replace("\uFEFF", "").trim();
+            if (!text.isEmpty()) expected = text.split("\\s+")[0].toLowerCase(java.util.Locale.ROOT);
+        } finally {
+            checksum.delete();
+        }
         if (!expected.matches("[0-9a-f]{64}")) {
             archive.delete();
             throw new IOException("The published checksum for " + archive.getName() + " is missing or malformed; refusing to use the download");
@@ -189,7 +195,8 @@ public class MCEFDownloader {
             MCEF.getLogger().warn("Failed to download JCEF hash.");
         }
 
-        jcefBuildHashFileTemp.renameTo(jcefBuildHashFile);
+        // renameTo fails on Windows while the old file exists, which left the stale checksum in place
+        java.nio.file.Files.move(jcefBuildHashFileTemp.toPath(), jcefBuildHashFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 
         return false;
     }
