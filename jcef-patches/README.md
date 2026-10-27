@@ -103,3 +103,21 @@ Linux x86-64, Xvfb, CEF 116, unmodified java-cef Java, host pumping at 250 Hz un
 | upstream natives with the patched Java side (`NativeExt`) | 30.0, `buildInfo()` is null, requests report false, no crash | - |
 
 Not measured: Windows and macOS builds (cannot be built where this was written), anything inside Minecraft, tearing, GPU upload.
+
+## Frame copy cost and tearing (Phases 4 and 5 of the 2026-10-27 audit)
+
+**Copy cost, reproduced.** The in-game probe measured the Minecraft shell's per-paint copy at p50 7.4 ms (2510x1312). `bench/CopyBench.java` runs the same
+loop (read the BGRA ints, swap to ABGR, one bounds-checked off-heap write per pixel as `NativeImage.setPixelABGR` does) and gets **7.2 to 7.8 ms**
+per full frame on this machine, so the cost is the per-pixel conversion loop itself, about 2.3 ns per pixel, not allocation or upload. Two variants
+were tried: reading rows in bulk before the per-pixel write (**25 ms, slower**) and bulk read plus bulk write (**15 to 17 ms, also slower**; it would
+also need a bulk write API of `NativeImage` that was not verified). The existing loop is already the fastest of the variants that use only known
+API. What would remove the conversion is uploading CEF's BGRA bytes as they are (a BGRA texture format or a GPU swizzle), which depends on 26.x's
+`GpuDevice`/`NativeImage` API and was not guessed at. What does reduce the cost today is fewer frames (`browserFpsMinecraft`, default 30) and a smaller
+browser area. Dirty rectangles are already used, but scrolling dirties the whole view.
+
+**Tearing, what the code says.** In the host-pumped loop `onPaint` runs inside `MCEF.pump()` on the render thread, converts into the
+`NativeImage` and uploads, and the screen draws later on the same thread: a half-written frame can never be drawn, so there is no buffer race in
+the Minecraft shell. (The desktop window did have one: the render thread wrote the `BufferedImage` while the AWT thread drew it; fixed with a lock.)
+The tearing reported with VSync off is therefore most likely ordinary display tearing of the whole game picture (presentation without VSync), which
+no browser code can change. This was **not** verified: it needs a run with VSync on and off on a real display, which the audit environment did not
+have. With the opt-in threaded loop the hand-over is `MCEFRenderer.offerFrame/flush` under a lock, which keeps whole frames only.
