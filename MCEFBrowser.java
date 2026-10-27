@@ -554,6 +554,7 @@ public class MCEFBrowser extends CefBrowserOsr {
     // Cursor handling
     @Override
     public boolean onCursorChange(CefBrowser browser, int cursorType) {
+        com.levviata.integratedntwiki.shell.FrameProbe.cursorFromChromium();
         cursorType = dragContext.getVirtualCursor(cursorType);
         pageCursor = cursorType;
         final int type = cursorType;
