@@ -204,6 +204,10 @@ public final class MCEF {
     public static boolean initialize() {
         if (isInitialized()) return true;
         if (state != State.READY) return false;
+        if (com.levviata.integratedntwiki.shell.FrameProbe.ON) {
+            com.levviata.integratedntwiki.shell.FrameProbe.setOutput(LOGGER::info);
+            LOGGER.info("[probe] frame probe is ON (-D{}=true): a report is logged every 5 s", com.levviata.integratedntwiki.shell.FrameProbe.PROPERTY);
+        }
         WikiLog.info("Initializing CEF on " + MCEFPlatform.getPlatform().getNormalizedName() + "...");
         if (CefUtil.init()) {
             app = new MCEFApp(CefUtil.getCefApp());
@@ -284,7 +288,10 @@ public final class MCEF {
 
     /** Lets CEF run one iteration of its message loop. Call once per frame from the render thread. */
     public static void pump() {
-        if (app != null) app.getHandle().N_DoMessageLoopWork();
+        if (app == null) return;
+        long probe = com.levviata.integratedntwiki.shell.FrameProbe.begin();
+        app.getHandle().N_DoMessageLoopWork(); // Chromium's frame callbacks run in here, so the probe's pump time includes the paint copies
+        com.levviata.integratedntwiki.shell.FrameProbe.pump(probe);
     }
 
     /** Request a shutdown of CEF. Nothing happens if not initialized. */

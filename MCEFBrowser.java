@@ -186,12 +186,15 @@ public class MCEFBrowser extends CefBrowserOsr {
     @Override
     public void onPaint(CefBrowser browser, boolean popup, Rectangle[] dirtyRects, ByteBuffer buffer, int width, int height) {
         if (popup || dirtyRects.length == 0 || hidden) return;
+        long probe = com.levviata.integratedntwiki.shell.FrameProbe.begin(); // 0 (and free) unless -Dintegratedntwiki.probe=true
         FrameSink target = sink;
         if (target != null) { // shown in a desktop window: the Minecraft texture is not needed (and not kept up to date)
             target.onFrame(buffer, width, height, dirtyRects);
+            com.levviata.integratedntwiki.shell.FrameProbe.paint("desktop", probe, width, height);
             return;
         }
         renderer.onPaint(buffer, width, height, dirtyRects);
+        com.levviata.integratedntwiki.shell.FrameProbe.paint("mc", probe, width, height);
     }
 
     private volatile FrameSink sink;

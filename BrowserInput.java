@@ -122,6 +122,7 @@ public final class BrowserInput {
      */
     public boolean mousePressed(double x, double y, int button, boolean doubleClick) {
         if (!inView(x, y) || button > MAX_FORWARDED_BUTTON) return false;
+        com.levviata.integratedntwiki.shell.FrameProbe.input();
         focusBrowser();
         int px = pixelX(x), py = pixelY(y);
         int count = clicks.press(button, px, py, System.nanoTime(), doubleClick);
@@ -162,6 +163,7 @@ public final class BrowserInput {
      */
     public boolean mouseScrolled(double x, double y, double scrollX, double scrollY) {
         if (!inView(x, y)) return false;
+        com.levviata.integratedntwiki.shell.FrameProbe.input();
         int flags = heldFlags();
         if (scrollY != 0) browser.sendMouseWheel(pixelX(x), pixelY(y), scrollY, flags);
         // Chromium's wheel delta is the direction the content moves, so a turn to the right (+x) is a negative delta.
@@ -207,6 +209,7 @@ public final class BrowserInput {
     public boolean keyPressed(KeyEvent event) {
         modifiers = event.modifiers();
         if (owner != Owner.BROWSER) return false;
+        com.levviata.integratedntwiki.shell.FrameProbe.input();
         browser.sendKeyPress(event.key(), event.scancode(), event.modifiers());
         // GLFW sends no character for Enter, but Chromium submits forms and follows focused links on the text event.
         if ((event.key() == GLFW.GLFW_KEY_ENTER || event.key() == GLFW.GLFW_KEY_KP_ENTER) && (event.modifiers() & GLFW.GLFW_MOD_ALT) == 0)
