@@ -51,7 +51,7 @@ jobs:
       - name: Build and package
         shell: bash
         run: bash tools/build-natives.sh ${{ matrix.platform }} out
-      - name: Smoke test (Linux): loads the library, reports the build id, caps a headless off-screen browser at 60 fps
+      - name: "Smoke test (Linux) - loads the library, checks the build id, frame cap and threaded loop"
         if: runner.os == 'Linux'
         shell: bash
         run: bash tools/smoke-natives.sh out/${{ matrix.platform }}.tar.gz
