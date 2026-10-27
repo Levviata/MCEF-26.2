@@ -558,7 +558,14 @@ public class MCEFBrowser extends CefBrowserOsr {
         cursorType = dragContext.getVirtualCursor(cursorType);
         pageCursor = cursorType;
         final int type = cursorType;
-        MCEF.onRenderThread(() -> cursorChangeListener.onCursorChange(type)); // the window library's cursor calls belong to the render thread
+        if (sink != null) {
+            // The desktop window sets its cursor on the AWT thread (FrameSink.onCursor is thread-safe), so no hop to the game's thread: with the
+            // threaded loop that hop waited for the game's next frame, which runs only a few times a second while the game is in the
+            // background, and the hand cursor appeared 0.1 to 1 s after the pointer reached a link (measured with the frame probe).
+            setCursor(CefCursorType.fromId(type));
+        } else {
+            MCEF.onRenderThread(() -> cursorChangeListener.onCursorChange(type)); // the window library's cursor calls belong to the render thread
+        }
         return super.onCursorChange(browser, cursorType);
     }
 
