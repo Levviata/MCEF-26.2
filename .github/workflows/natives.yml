@@ -1,0 +1,83 @@
+name: natives
+
+# Builds MCEF's libjcef (CinemaMod/java-cef at the pinned commit + jcef-patches/) on every platform it can be built for, smoke-tests the
+# Linux build, and (manual run with "publish" ticked) attaches the archives to the GitHub release the mod's downloader looks for:
+#   https://github.com/Levviata/MCEF-26.2/releases/download/natives-<revision>-<commit7>/<platform>.tar.gz (+ .sha256)
+# linux_arm64 and windows_arm64 are not built: the upstream archives for them hold x86-64 binaries (see MCEFPlatform#hasMatchingNatives).
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Create or update the GitHub release with these archives (marked pre-release until you edit it)"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - jcef-patches/**
+      - tools/build-natives.sh
+      - .github/workflows/natives.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux_amd64,   os: ubuntu-22.04 }
+          - { platform: windows_amd64, os: windows-2022 }
+          - { platform: macos_amd64,   os: macos-15-intel }
+          - { platform: macos_arm64,   os: macos-14 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev libx11-dev libxt-dev xvfb
+      - name: macOS / Windows build dependencies
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then brew install ninja; else choco install ninja -y; fi
+      - name: MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with: { arch: x64 }
+      - name: Build and package
+        shell: bash
+        run: bash tools/build-natives.sh ${{ matrix.platform }} out
+      - name: Smoke test (Linux): loads the library, reports the build id, caps a headless off-screen browser at 60 fps
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tools/smoke-natives.sh out/${{ matrix.platform }}.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: natives-${{ matrix.platform }}
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist, pattern: natives-*, merge-multiple: true }
+      - name: Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REV="mcef$(tr -d '[:space:]' < jcef-patches/VERSION)"
+          TAG="natives-$REV-eaeb3d4"
+          ls -la dist
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --title "MCEF Chromium natives $REV (java-cef eaeb3d4, CEF 116)" \
+            --notes "Built by the natives workflow from CinemaMod/java-cef eaeb3d4 + jcef-patches ($REV). See jcef-patches/README.md. Pre-release until verified in the game on each platform."
+          gh release upload "$TAG" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.build.json --clobber

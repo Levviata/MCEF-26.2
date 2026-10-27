@@ -82,6 +82,15 @@ final class CefUtil {
             return false;
         }
 
+        // Which libjcef is this? MCEF's own build has extra features; the CinemaMod download does not (and the mod then works as before).
+        String nativeInfo = NativeExt.buildInfo();
+        MCEF.getLogger().info("Chromium runtime: {}", nativeInfo == null ? "upstream java-cef natives (no MCEF extensions: Chromium stays at 30 fps, host-pumped loop)" : nativeInfo);
+        boolean threaded = NativeExt.requestThreadedLoop(MCEF.threadedLoopRequested(), platform.isWindows());
+        if (MCEF.threadedLoopRequested() && !threaded)
+            MCEF.getLogger().warn("The threaded Chromium loop was requested but is not available here (needs Windows and MCEF's libjcef): using the host-pumped loop");
+        else if (threaded)
+            MCEF.getLogger().warn("Chromium runs its own message loop thread (experimental): its callbacks arrive off the render thread");
+
         CefSettings cefSettings = new CefSettings();
         cefSettings.windowless_rendering_enabled = true;
         Path cache = new File(System.getProperty("mcef.libraries.path")).toPath().resolveSibling("cache");

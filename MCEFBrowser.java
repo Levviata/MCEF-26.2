@@ -32,6 +32,7 @@ import org.lwjgl.glfw.GLFW;
 
 import java.awt.Point;
 import com.levviata.integratedntwiki.shell.desktop.FrameSink;
+import com.levviata.integratedntwiki.WikiLog;
 import java.awt.Rectangle;
 import java.nio.ByteBuffer;
 
@@ -187,14 +188,42 @@ public class MCEFBrowser extends CefBrowserOsr {
     public void onPaint(CefBrowser browser, boolean popup, Rectangle[] dirtyRects, ByteBuffer buffer, int width, int height) {
         if (popup || dirtyRects.length == 0 || hidden) return;
         long probe = com.levviata.integratedntwiki.shell.FrameProbe.begin(); // 0 (and free) unless -Dintegratedntwiki.probe=true
+        applyFrameRateIfNeeded();
         FrameSink target = sink;
         if (target != null) { // shown in a desktop window: the Minecraft texture is not needed (and not kept up to date)
             target.onFrame(buffer, width, height, dirtyRects);
             com.levviata.integratedntwiki.shell.FrameProbe.paint("desktop", probe, width, height);
             return;
         }
-        renderer.onPaint(buffer, width, height, dirtyRects);
+        if (NativeExt.threadedLoopActive()) renderer.offerFrame(buffer, width, height, dirtyRects); // CEF's thread: the render thread shows it at its next draw
+        else renderer.onPaint(buffer, width, height, dirtyRects);
         com.levviata.integratedntwiki.shell.FrameProbe.paint("mc", probe, width, height);
+    }
+
+    // ---- frame rate (MCEF's libjcef; an upstream libjcef ignores this and Chromium stays at its 30 fps)
+
+    private volatile int appliedFps = -1;
+    private int fpsRetry;
+
+    /** How many frames per second Chromium may produce for this browser: the desktop window's setting while it shows it, else the game shell's. */
+    private int wantedFps() {
+        return sink != null ? MCEF.frameRateDesktop() : MCEF.frameRateMinecraft();
+    }
+
+    /**
+     * Passes the wanted frame rate on to Chromium when it changed. Runs from the paint callback, when the native browser surely exists;
+     * the call is cheap and safe from any thread. Without MCEF's libjcef it is tried a few times and then given up.
+     */
+    private void applyFrameRateIfNeeded() {
+        int want = wantedFps();
+        if (want == appliedFps || fpsRetry > 3) return;
+        if (NativeExt.setWindowlessFrameRate(this, want)) {
+            appliedFps = want;
+            fpsRetry = 0;
+            WikiLog.info("Chromium frame rate for a browser set to {} fps", want);
+        } else {
+            fpsRetry++;
+        }
     }
 
     private volatile FrameSink sink;
@@ -474,7 +503,8 @@ public class MCEFBrowser extends CefBrowserOsr {
     public boolean onCursorChange(CefBrowser browser, int cursorType) {
         cursorType = dragContext.getVirtualCursor(cursorType);
         pageCursor = cursorType;
-        cursorChangeListener.onCursorChange(cursorType);
+        final int type = cursorType;
+        MCEF.onRenderThread(() -> cursorChangeListener.onCursorChange(type)); // the window library's cursor calls belong to the render thread
         return super.onCursorChange(browser, cursorType);
     }
 

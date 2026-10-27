@@ -42,14 +42,41 @@ public class MCEFDownloader {
     private static final String JAVA_CEF_DOWNLOAD_URL = "${host}/java-cef-builds/${java-cef-commit}/${platform}.tar.gz";
     private static final String JAVA_CEF_CHECKSUM_DOWNLOAD_URL = "${host}/java-cef-builds/${java-cef-commit}/${platform}.tar.gz.sha256";
 
+    /**
+     * Where the natives come from. {@code UPSTREAM}: CinemaMod's build (unmodified java-cef, Chromium capped at 30 fps, host-pumped loop).
+     * {@code MCEF}: this project's build of the same java-cef commit plus the patches in {@code jcef-patches/} (frame rate setting,
+     * optional threaded loop), published as GitHub release assets; its archive is verified against its published SHA-256.
+     */
+    public enum Source { UPSTREAM, MCEF }
+
+    /** Release assets of the MCEF build: {@code <this>/natives-<revision>-<commit7>/<platform>.tar.gz} (+ {@code .sha256}). */
+    public static final String MCEF_NATIVES_BASE = "https://github.com/Levviata/MCEF-26.2/releases/download";
+    /** Bumped with every change to the patches (the number in {@code jcef-patches/VERSION}); it is part of the release tag. */
+    public static final String MCEF_NATIVES_REVISION = "mcef1";
+
     private final String host;
     private final String javaCefCommitHash;
     private final MCEFPlatform platform;
+    private final Source source;
 
     public MCEFDownloader(String host, String javaCefCommitHash, MCEFPlatform platform) {
+        this(host, javaCefCommitHash, platform, Source.UPSTREAM);
+    }
+
+    public MCEFDownloader(String host, String javaCefCommitHash, MCEFPlatform platform, Source source) {
         this.host = host;
         this.javaCefCommitHash = javaCefCommitHash;
         this.platform = platform;
+        this.source = source;
+    }
+
+    public Source getSource() {
+        return source;
+    }
+
+    /** The release tag of the MCEF build for this java-cef commit, e.g. {@code natives-mcef1-eaeb3d4}. */
+    public static String mcefTag(String javaCefCommit) {
+        return "natives-" + MCEF_NATIVES_REVISION + "-" + javaCefCommit.substring(0, Math.min(7, javaCefCommit.length()));
     }
 
     public String getHost() {
@@ -65,6 +92,10 @@ public class MCEFDownloader {
     }
 
     private String formatURL(String url) {
+        if (source == Source.MCEF) {
+            String file = url.endsWith(".sha256") ? "${platform}.tar.gz.sha256" : "${platform}.tar.gz";
+            return (MCEF_NATIVES_BASE + "/" + mcefTag(javaCefCommitHash) + "/" + file).replace("${platform}", platform.getNormalizedName());
+        }
         return url
                 .replace("${host}", host)
                 .replace("${java-cef-commit}", javaCefCommitHash)
@@ -74,7 +105,63 @@ public class MCEFDownloader {
     public void downloadJavaCefBuild() throws IOException {
         File mcefLibrariesPath = new File(System.getProperty("mcef.libraries.path"));
         MCEFDownloadListener.INSTANCE.setTask("Downloading Chromium Embedded Framework");
-        downloadFile(getJavaCefDownloadUrl(), new File(mcefLibrariesPath, platform.getNormalizedName() + ".tar.gz"));
+        File archive = new File(mcefLibrariesPath, platform.getNormalizedName() + ".tar.gz");
+        downloadFile(getJavaCefDownloadUrl(), archive);
+        if (source == Source.MCEF) verifyArchive(archive);
+        // Which build is installed, for diagnostics and for the log line at start-up
+        writeMarker(mcefLibrariesPath);
+    }
+
+    /** The file next to the archive that says which source the installed runtime came from. */
+    static File markerFile(File librariesPath, MCEFPlatform platform) {
+        return new File(librariesPath, platform.getNormalizedName() + ".natives-source");
+    }
+
+    private void writeMarker(File librariesPath) throws IOException {
+        String text = source == Source.MCEF ? "mcef " + mcefTag(javaCefCommitHash) : "upstream " + javaCefCommitHash;
+        java.nio.file.Files.writeString(markerFile(librariesPath, platform).toPath(), text, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The MCEF build's archive must match the SHA-256 published beside it: a truncated or tampered download is deleted and refused, so
+     * the game never extracts (and loads) a native library it cannot vouch for. The upstream archive keeps its old behaviour.
+     */
+    private void verifyArchive(File archive) throws IOException {
+        File checksum = new File(archive.getParentFile(), platform.getNormalizedName() + ".tar.gz.sha256"); // downloadJavaCefChecksum left the published one here
+        String expected = checksum.exists()
+                ? java.nio.file.Files.readString(checksum.toPath(), java.nio.charset.StandardCharsets.UTF_8).trim().split("\\s+")[0].toLowerCase(java.util.Locale.ROOT)
+                : "";
+        if (!expected.matches("[0-9a-f]{64}")) {
+            archive.delete();
+            throw new IOException("The published checksum for " + archive.getName() + " is missing or malformed; refusing to use the download");
+        }
+        String actual;
+        try (InputStream in = new FileInputStream(archive)) {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+            StringBuilder hex = new StringBuilder();
+            for (byte b : md.digest()) hex.append(String.format("%02x", b));
+            actual = hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IOException(e);
+        }
+        if (!actual.equals(expected)) {
+            archive.delete();
+            throw new IOException("Checksum mismatch for " + archive.getName() + ": expected " + expected + " but the download is " + actual);
+        }
+    }
+
+    /** Throws if the published checksum of this source cannot be fetched (the release does not exist, or the host is unreachable). Leaves no state behind. */
+    public void checkPublished() throws IOException {
+        File mcefLibrariesPath = new File(System.getProperty("mcef.libraries.path"));
+        File probe = new File(mcefLibrariesPath, platform.getNormalizedName() + ".tar.gz.sha256.probe");
+        try {
+            downloadFile(getJavaCefChecksumDownloadUrl(), probe);
+        } finally {
+            probe.delete();
+        }
     }
 
     /**

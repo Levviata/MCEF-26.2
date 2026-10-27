@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 22d0fc0..5892c75 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -300,7 +300,7 @@ execute_process(
+   RESULT_VARIABLE EXECUTE_RV
+   )
+ if(NOT EXECUTE_RV STREQUAL "0")
+-  message(FATAL_ERROR "Execution failed with unexpected result: ${EXECUTE_RV}")
++  message(WARNING "Execution failed with unexpected result: ${EXECUTE_RV}")
+ endif()
+ 
+ 
