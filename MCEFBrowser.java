@@ -112,9 +112,13 @@ public class MCEFBrowser extends CefBrowserOsr {
       this.deviceScaleFactor = deviceScaleFactor;
     }
 
+    /** The last scale read from a usable game window; used while the window cannot be measured (see below). */
+    private volatile double lastKnownDsf = 1;
+
     public double getDeviceScaleFactor() {
       if (autoDSF) {
         long window = GLFW.glfwGetCurrentContext();
+        if (window == 0L) return lastKnownDsf;
 
         int[] fbWidth = new int[1];
         int[] fbHeight = new int[1];
@@ -124,9 +128,11 @@ public class MCEFBrowser extends CefBrowserOsr {
         int[] winHeight = new int[1];
         GLFW.glfwGetWindowSize(window, winWidth, winHeight);
 
+        // A minimized game window reports a size of 0x0 (and a framebuffer of 0x0). Dividing by that crashed the game on every tick
+        // while the desktop browser was open; DeviceScale keeps the last real scale until the window has a size again.
         // The device scale factor is the ratio of the allocated framebuffer size to the window size
         // https://stackoverflow.com/questions/44719635/what-is-the-difference-between-glfwgetwindowsize-and-glfwgetframebuffersize
-        return Math.max(1, Math.min(fbWidth[0] / winWidth[0], fbHeight[0] / winHeight[0]));
+        return lastKnownDsf = com.levviata.integratedntwiki.shell.DeviceScale.of(fbWidth[0], fbHeight[0], winWidth[0], winHeight[0], lastKnownDsf);
       } else {
           return deviceScaleFactor > 0 ? deviceScaleFactor : 1;
       }
@@ -490,6 +496,11 @@ public class MCEFBrowser extends CefBrowserOsr {
     }
 
     public void setCursor(CefCursorType cursorType) {
+        FrameSink target = sink;
+        if (target != null) { // shown in a desktop window: that window owns the pointer; the game window's cursor and grab mode stay untouched
+            target.onCursor(cursorType.name());
+            return;
+        }
         if (cursorType == CefCursorType.NONE) {
             GLFW.glfwSetInputMode(GLFW.glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
         } else {
