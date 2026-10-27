@@ -236,6 +236,14 @@ public class MCEFBrowser extends CefBrowserOsr {
     public void setFrameSink(FrameSink sink) {
         FrameSink before = this.sink;
         this.sink = sink;
+        if (before == null && sink != null) { // the desktop window took over: the game window must not keep the page's last cursor (a hand over a link)
+            MCEF.onRenderThread(() -> {
+                try {
+                    long w = GLFW.glfwGetCurrentContext();
+                    if (w != 0L) GLFW.glfwSetCursor(w, 0L);
+                } catch (Throwable ignored) { }
+            });
+        }
         if (before != sink && !isClosed()) invalidate(); // the new target has no picture yet
     }
 
