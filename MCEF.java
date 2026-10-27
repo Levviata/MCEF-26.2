@@ -336,6 +336,11 @@ public final class MCEF {
 
     static boolean threadedLoopRequested() { return threadedLoopRequested; }
 
+    /** Whether the caller is on the thread the game's window library belongs to (always true with the host-pumped loop). */
+    public static boolean isRenderThread() {
+        return !NativeExt.threadedLoopActive() || Minecraft.getInstance().isSameThread();
+    }
+
     /**
      * Runs {@code task} on the render thread: at once when this is it (always, with the host-pumped loop, where every callback already
      * is on it), otherwise queued to the game's main thread. For work in a Chromium callback that must not run on Chromium's thread
