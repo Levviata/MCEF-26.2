@@ -1,0 +1,67 @@
+diff --git a/native/jni_scoped_helpers.cpp b/native/jni_scoped_helpers.cpp
+index b73fa58..2e57be3 100644
+--- a/native/jni_scoped_helpers.cpp
++++ b/native/jni_scoped_helpers.cpp
+@@ -12,9 +12,18 @@
+ 
+ namespace {
+ 
++// A thread that was not started by Java (Chromium's own threads, in MCEF's threaded message loop mode) is attached to the JVM the first time
++// it calls into Java and stays attached until the thread exits. Attaching and detaching around every callback made the JVM create a new
++// java.lang.Thread for each one (about 400 a second while a page was painting).
++struct ThreadAttachment {
++  bool attached = false;
++  ~ThreadAttachment();
++};
++thread_local ThreadAttachment tlsAttachment;
++
+ // Retrieves the JNIEnv for the current thread. Attaches the VM to the current
+-// thread if necessary. Sets |mustDetach| to true if DetachJNIEnv must be
+-// called.
++// thread if necessary. |mustDetach| is always false: the attachment lasts until
++// the thread exits (see ThreadAttachment).
+ jint GetJNIEnv(JNIEnv** env, bool* mustDetach) {
+   *env = nullptr;
+   *mustDetach = false;
+@@ -25,17 +34,21 @@ jint GetJNIEnv(JNIEnv** env, bool* mustDetach) {
+ 
+   jint result = jvm->GetEnv((void**)env, JNI_VERSION_1_6);
+   if (result == JNI_EDETACHED) {
+-    result = jvm->AttachCurrentThreadAsDaemon((void**)env, nullptr);
++    JavaVMAttachArgs args;
++    args.version = JNI_VERSION_1_6;
++    args.name = const_cast<char*>("Chromium");
++    args.group = nullptr;
++    result = jvm->AttachCurrentThreadAsDaemon((void**)env, &args);
+     if (result == JNI_OK) {
+-      *mustDetach = true;
++      tlsAttachment.attached = true;
+     }
+   }
+ 
+   return result;
+ }
+ 
+-// Detaches the current thread from the VM. Should only be called if
+-// |mustDetach| was set to true by GetJNIEnv.
++// Detaches the current thread from the VM. Only needed for a thread that
++// attached without going through GetJNIEnv; kept for the callers that exist.
+ void DetachJNIEnv() {
+   JavaVM* jvm = GetJVM();
+   if (jvm) {
+@@ -43,6 +56,15 @@ void DetachJNIEnv() {
+   }
+ }
+ 
++ThreadAttachment::~ThreadAttachment() {
++  if (attached) {
++    JavaVM* jvm = GetJVM();
++    if (jvm) {
++      jvm->DetachCurrentThread();
++    }
++  }
++}
++
+ // Using a simple cache to store global refs to loaded classes, since we
+ // need to load the same classes over and over, which should neither change
+ // on the JVM side nor be GCed...
