@@ -431,8 +431,61 @@ public class MCEFBrowser extends CefBrowserOsr {
             amount = amount * 3;
         }
 
+        if (!MCEFPlatform.getPlatform().isMacOS() && MCEF.smoothScrolling()) { // macOS: the system already sends smooth, inertial wheel events
+            boolean horizontal = (modifiers & GLFW_MOD_SHIFT) != 0;
+            wheelX = mouseX;
+            wheelY = mouseY;
+            wheelMods = modifiers;
+            (horizontal ? wheelH : wheelV).add(amount * WHEEL_UNIT_PX);
+            ensureWheelTicking();
+            return;
+        }
+
         CefMouseWheelEvent e = new CefMouseWheelEvent(CefMouseWheelEvent.WHEEL_UNIT_SCROLL, mouseX, mouseY, amount, modifiers);
         sendMouseWheelEvent(e);
+    }
+
+    // ---- smooth scrolling (see SmoothWheel)
+
+    /** CefMouseWheelEvent scrolls {@code delta * 32} units, and a unit is a pixel. */
+    private static final double WHEEL_UNIT_PX = 32.0;
+    private static final java.util.concurrent.ScheduledExecutorService WHEEL_TICKER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "MCEF-SmoothScroll");
+                t.setDaemon(true);
+                return t;
+            });
+    private final SmoothWheel wheelV = new SmoothWheel(), wheelH = new SmoothWheel();
+    private volatile int wheelX, wheelY, wheelMods;
+    private java.util.concurrent.ScheduledFuture<?> wheelTask;
+    private long wheelLastNs;
+
+    private synchronized void ensureWheelTicking() {
+        if (wheelTask != null && !wheelTask.isDone()) return;
+        wheelLastNs = System.nanoTime();
+        wheelTask = WHEEL_TICKER.scheduleAtFixedRate(this::wheelTick, 4, 8, java.util.concurrent.TimeUnit.MILLISECONDS); // about 120 steps a second
+    }
+
+    private void wheelTick() {
+        try {
+            if (isClosed()) {
+                wheelV.clear();
+                wheelH.clear();
+            }
+            long now = System.nanoTime();
+            long dt = now - wheelLastNs;
+            wheelLastNs = now;
+            int v = wheelV.step(dt), h = wheelH.step(dt);
+            if (v != 0) sendMouseWheelEvent(new CefMouseWheelEvent(CefMouseWheelEvent.WHEEL_UNIT_SCROLL, wheelX, wheelY, v / WHEEL_UNIT_PX, wheelMods & ~GLFW_MOD_SHIFT));
+            if (h != 0) sendMouseWheelEvent(new CefMouseWheelEvent(CefMouseWheelEvent.WHEEL_UNIT_SCROLL, wheelX, wheelY, h / WHEEL_UNIT_PX, wheelMods | GLFW_MOD_SHIFT));
+            if (wheelV.idle() && wheelH.idle()) {
+                synchronized (this) {
+                    if (wheelV.idle() && wheelH.idle() && wheelTask != null) wheelTask.cancel(false);
+                }
+            }
+        } catch (RuntimeException e) {
+            MCEF.getLogger().warn("Smooth scrolling step failed", e);
+        }
     }
 
     // Drag & drop
