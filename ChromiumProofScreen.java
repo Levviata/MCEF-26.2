@@ -1029,7 +1029,7 @@ public final class ChromiumProofScreen extends Screen {
      * touched when the edge set changes, so Chromium's own cursor handling over the page is left alone.
      */
     private void updateResizeCursor(BrowserTab tab, double guiX, double guiY) {
-        int edges = session.layout().resizeEdges(toShell(guiX), toShell(guiY));
+        int edges = hitAt(guiX, guiY).part().resizeEdges(); // what a press here would grab: the frame, or the wider strip where no control is
         if (edges == cursorEdges) return;
         cursorEdges = edges;
         if (edges != WindowResize.NONE) tab.browser().setCursor(resizeCursor(edges));
