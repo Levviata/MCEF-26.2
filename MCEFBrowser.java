@@ -186,7 +186,11 @@ public class MCEFBrowser extends CefBrowserOsr {
     // used raw GL sub-uploads and is deferred to the input phase. Only the main view is drawn.
     @Override
     public void onPaint(CefBrowser browser, boolean popup, Rectangle[] dirtyRects, ByteBuffer buffer, int width, int height) {
-        if (popup || dirtyRects.length == 0 || hidden) return;
+        if (hidden) {
+            applyHiddenIfNeeded(); // a tab opened in the background: the native browser did not exist when it was hidden
+            return;
+        }
+        if (popup || dirtyRects.length == 0) return;
         long probe = com.levviata.integratedntwiki.shell.FrameProbe.begin(); // 0 (and free) unless -Dintegratedntwiki.probe=true
         applyFrameRateIfNeeded();
         FrameSink target = sink;
@@ -248,7 +252,38 @@ public class MCEFBrowser extends CefBrowserOsr {
     public void setHidden(boolean hidden) {
         if (this.hidden == hidden) return;
         this.hidden = hidden;
+        hiddenApplied = false;
+        applyHiddenIfNeeded();
         if (!hidden) invalidate();
+    }
+
+    private volatile boolean hiddenApplied;
+    private int hiddenRetry;
+
+    /**
+     * Tells Chromium that this browser is hidden (or shown again) so a background tab costs nothing: with MCEF's libjcef it is
+     * {@code WasHidden}; with the upstream one Chromium cannot be told, so the tab is slowed to 1 frame per second instead (it was painting
+     * at the full rate for nothing: 8 open tabs used 5 times the CPU of one). Tried again at the next paint while the native browser
+     * does not exist yet.
+     */
+    private void applyHiddenIfNeeded() {
+        if (hiddenApplied || hiddenRetry > 5) return;
+        boolean wanted = hidden;
+        if (NativeExt.setHidden(this, wanted)) {
+            hiddenApplied = true;
+            hiddenRetry = 0;
+            if (!wanted) appliedFps = -1; // the rate chosen for the shown browser is applied again
+        } else if (!NativeExt.hasFeature("hide-browser")) {
+            if (NativeExt.setWindowlessFrameRate(this, wanted ? 1 : wantedFps())) {
+                hiddenApplied = true;
+                hiddenRetry = 0;
+                appliedFps = wanted ? 1 : wantedFps();
+            } else {
+                hiddenRetry++;
+            }
+        } else {
+            hiddenRetry++;
+        }
     }
 
     public boolean isHidden() {

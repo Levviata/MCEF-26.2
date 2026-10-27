@@ -30,12 +30,13 @@ used to endorse the product. These patches are BSD-3 like the code they modify. 
 | `0002-offscreen-threaded-message-loop.patch` | `native/context.cpp`: if the Java system property `mcef.multiThreadedMessageLoop` is `true`, an off-screen browser uses CEF's own multi-threaded message loop instead of `external_message_pump` | Lets Chromium keep running while the game's frame loop is slow or blocked (see "Threaded loop") |
 | `0003-optional-clang-format-download.patch` | Root `CMakeLists.txt`: a failed download of the clang-format style tool is a warning, not a fatal error | Build only. The download needs Google Storage and Python tooling that breaks on current Python; the tool is not part of the output |
 | `0004-keep-jvm-attachment-per-thread.patch` | `native/jni_scoped_helpers.cpp`: a thread that was not started by Java attaches to the JVM once, named `Chromium`, and stays attached until it exits; it used to attach and detach around every callback | With the threaded loop every Chromium callback arrives on a Chromium thread, and each attach made the JVM create a new `java.lang.Thread`. Measured (Linux, 8 s of 60 fps painting): 1312 Java threads created before, 0 after |
+| `0005-hide-offscreen-browser.patch` | `native/mcef_ext.cpp`: `NativeExt.setHidden0` calls `CefBrowserHost::WasHidden`; feature `hide-browser` | Chromium kept rendering every hidden OSR tab at the full frame rate, so each open tab cost CPU. Measured (Linux, 8 tabs): 1.39 cores before, 0.27 after, 0 paints/s from background tabs |
 
 Unpatched behaviour is unchanged unless the new entry points are called or the property is set.
 
 ## Identity and compatibility at run time
 
-`libjcef` built here reports `"<revision>+<commit7> | <features>"` (for example `mcef2+eaeb3d4 | frame-rate threaded-loop`) through
+`libjcef` built here reports `"<revision>+<commit7> | <features>"` (for example `mcef3+eaeb3d4 | frame-rate threaded-loop hide-browser`) through
 `NativeExt.buildInfo()`; the mod logs it at start-up as `Chromium runtime: ...`. An upstream library has no such function: `buildInfo()` is
 `null`, every `NativeExt` call reports "not supported", and the mod behaves exactly as before (Chromium at 30 fps, host-pumped loop). The Java
 and native halves can therefore never be mismatched in a way that breaks: a feature is used only if the library lists it.
@@ -67,7 +68,7 @@ with **publish** ticked: it creates the release `natives-<revision>-<commit7>` a
 `build.json` files. The mod looks for exactly that tag: `MCEFDownloader.mcefTag(commit)`.
 
 **Changing a patch:** edit the patch, bump `jcef-patches/VERSION` (`1` -> `2`) **and** `MCEFDownloader.MCEF_NATIVES_REVISION` (`mcef1` ->
-`mcef2`) together. A new tag means installed copies re-download once (the downloader compares the published checksum with the installed one).
+`mcef3`) together. A new tag means installed copies re-download once (the downloader compares the published checksum with the installed one).
 
 ## How the mod gets them
 

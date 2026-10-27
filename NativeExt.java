@@ -17,6 +17,8 @@ public final class NativeExt {
 
     private static native boolean setWindowlessFrameRate0(CefBrowser browser, int fps);
 
+    private static native boolean setHidden0(CefBrowser browser, boolean hidden);
+
     private static volatile String info;
     private static volatile boolean probed;
 
@@ -50,6 +52,20 @@ public final class NativeExt {
         if (!hasFeature("frame-rate")) return false;
         try {
             return setWindowlessFrameRate0(browser, Math.max(1, Math.min(60, fps)));
+        } catch (UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
+    /**
+     * Hides or shows one off-screen browser for Chromium ({@code CefBrowserHost::WasHidden}): a hidden browser stops rendering and
+     * painting and its animation frames stop, like a background tab in Chrome. Safe to call from any thread.
+     * @return true if the request reached the browser; false if the native library does not support it or the browser is not created yet
+     */
+    public static boolean setHidden(CefBrowser browser, boolean hidden) {
+        if (!hasFeature("hide-browser")) return false;
+        try {
+            return setHidden0(browser, hidden);
         } catch (UnsatisfiedLinkError e) {
             return false;
         }

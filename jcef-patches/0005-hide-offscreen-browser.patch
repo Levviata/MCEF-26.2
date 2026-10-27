@@ -1,0 +1,33 @@
+diff --git a/native/mcef_ext.cpp b/native/mcef_ext.cpp
+index 0000000..0000000 100644
+--- a/native/mcef_ext.cpp
++++ b/native/mcef_ext.cpp
+@@ -14,7 +14,7 @@
+ #endif
+ 
+ // Features this library implements, space separated; the Java side checks them by name.
+-#define MCEF_NATIVE_FEATURES "frame-rate threaded-loop"
++#define MCEF_NATIVE_FEATURES "frame-rate threaded-loop hide-browser"
+ 
+ extern "C" {
+ 
+@@ -40,4 +40,19 @@
+   return JNI_TRUE;
+ }
+ 
++// CefBrowserHost::WasHidden for one off-screen browser: a hidden browser stops rendering, painting and running animation frames, like a
++// background tab in Chrome. (The JCEF Java class only forwards visibility for windowed browsers.) Returns false if it is not created yet.
++JNIEXPORT jboolean JNICALL
++Java_com_levviata_integratedntwiki_mcef_NativeExt_setHidden0(
++    JNIEnv* env,
++    jclass,
++    jobject jbrowser,
++    jboolean hidden) {
++  CefRefPtr<CefBrowser> browser = GetJNIBrowser(env, jbrowser);
++  if (!browser.get() || !browser->GetHost())
++    return JNI_FALSE;
++  browser->GetHost()->WasHidden(hidden == JNI_TRUE);
++  return JNI_TRUE;
++}
++
+ }  // extern "C"

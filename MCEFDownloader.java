@@ -52,7 +52,7 @@ public class MCEFDownloader {
     /** Release assets of the MCEF build: {@code <this>/natives-<revision>-<commit7>/<platform>.tar.gz} (+ {@code .sha256}). */
     public static final String MCEF_NATIVES_BASE = "https://github.com/Levviata/MCEF-26.2/releases/download";
     /** Bumped with every change to the patches (the number in {@code jcef-patches/VERSION}); it is part of the release tag. */
-    public static final String MCEF_NATIVES_REVISION = "mcef2";
+    public static final String MCEF_NATIVES_REVISION = "mcef3";
 
     private final String host;
     private final String javaCefCommitHash;
@@ -74,7 +74,7 @@ public class MCEFDownloader {
         return source;
     }
 
-    /** The release tag of the MCEF build for this java-cef commit, e.g. {@code natives-mcef2-eaeb3d4}. */
+    /** The release tag of the MCEF build for this java-cef commit, e.g. {@code natives-mcef3-eaeb3d4}. */
     public static String mcefTag(String javaCefCommit) {
         return "natives-" + MCEF_NATIVES_REVISION + "-" + javaCefCommit.substring(0, Math.min(7, javaCefCommit.length()));
     }
