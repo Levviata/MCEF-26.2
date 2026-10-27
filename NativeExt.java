@@ -38,12 +38,7 @@ public final class NativeExt {
 
     /** Whether the loaded native library lists {@code feature} (for example {@code frame-rate}). */
     public static boolean hasFeature(String feature) {
-        String i = buildInfo();
-        if (i == null) return false;
-        int bar = i.indexOf('|');
-        if (bar < 0) return false;
-        for (String f : i.substring(bar + 1).trim().split("\\s+")) if (f.equals(feature)) return true;
-        return false;
+        return NativeFeatures.has(buildInfo(), feature);
     }
 
     /**
