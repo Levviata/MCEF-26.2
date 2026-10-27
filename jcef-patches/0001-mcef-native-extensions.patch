@@ -1,0 +1,91 @@
+diff --git a/native/CMakeLists.txt b/native/CMakeLists.txt
+index 0368b69..d51a5a4 100644
+--- a/native/CMakeLists.txt
++++ b/native/CMakeLists.txt
+@@ -8,6 +8,7 @@
+ 
+ # jcef sources.
+ set(JCEF_SRCS
++  mcef_ext.cpp
+   CefApp.cpp
+   CefApp.h
+   CefAuthCallback_N.cpp
+@@ -238,6 +239,9 @@ if(OS_LINUX)
+   # Compile flags specific to the JCEF library target.
+   # USING_JAVA          = Add the USING_JAVA define.
+   target_compile_definitions(${JCEF_TARGET} PRIVATE "USING_JAVA")
++  if(DEFINED MCEF_NATIVE_BUILD_ID)
++    target_compile_definitions(${JCEF_TARGET} PRIVATE "MCEF_NATIVE_BUILD_ID=\"${MCEF_NATIVE_BUILD_ID}\"")
++  endif()
+ 
+   # -fvisibility=default  = Give default visibility to declarations that are not explicitly marked as visible.
+   #                         Necessary so that JNI symbols are properly exported when building with GCC.
+@@ -306,6 +310,9 @@ if(OS_MAC)
+   # Compile flags specific to the JCEF library target.
+   # USING_JAVA          = Add the USING_JAVA define.
+   target_compile_definitions(${JCEF_TARGET} PRIVATE "USING_JAVA")
++  if(DEFINED MCEF_NATIVE_BUILD_ID)
++    target_compile_definitions(${JCEF_TARGET} PRIVATE "MCEF_NATIVE_BUILD_ID=\"${MCEF_NATIVE_BUILD_ID}\"")
++  endif()
+ 
+   # Name and location of the JCEF library in the main app bundle.
+   set(JCEF_TARGET_LIBRARY "lib${JCEF_TARGET}.dylib")
+@@ -408,6 +415,9 @@ if(OS_WINDOWS)
+   # Compile flags specific to the JCEF library target.
+   # USING_JAVA          = Add the USING_JAVA define.
+   target_compile_definitions(${JCEF_TARGET} PRIVATE "USING_JAVA")
++  if(DEFINED MCEF_NATIVE_BUILD_ID)
++    target_compile_definitions(${JCEF_TARGET} PRIVATE "MCEF_NATIVE_BUILD_ID=\"${MCEF_NATIVE_BUILD_ID}\"")
++  endif()
+ 
+   # Add the custom manifest files to the DLL and helper EXE.
+   ADD_WINDOWS_MANIFEST("${CMAKE_CURRENT_SOURCE_DIR}" "${JCEF_TARGET}" "dll")
+diff --git a/native/mcef_ext.cpp b/native/mcef_ext.cpp
+new file mode 100644
+index 0000000..6a925f9
+--- /dev/null
++++ b/native/mcef_ext.cpp
+@@ -0,0 +1,43 @@
++// MCEF extension (not part of upstream java-cef). Native entry points for the Java class
++// com.levviata.integratedntwiki.mcef.NativeExt, so that no upstream JCEF Java class has to change.
++// An upstream libjcef does not export these symbols: the Java side catches the resulting
++// UnsatisfiedLinkError and turns the features off (see NativeExt.java).
++#include <jni.h>
++
++#include <string>
++
++#include "include/cef_browser.h"
++#include "jni_util.h"
++
++#ifndef MCEF_NATIVE_BUILD_ID
++#define MCEF_NATIVE_BUILD_ID "unset"
++#endif
++
++// Features this library implements, space separated; the Java side checks them by name.
++#define MCEF_NATIVE_FEATURES "frame-rate threaded-loop"
++
++extern "C" {
++
++// The build id and feature list, e.g. "mcef-1+eaeb3d4 | frame-rate threaded-loop".
++JNIEXPORT jstring JNICALL
++Java_com_levviata_integratedntwiki_mcef_NativeExt_buildId0(JNIEnv* env, jclass) {
++  return NewJNIString(
++      env, std::string(MCEF_NATIVE_BUILD_ID) + " | " + MCEF_NATIVE_FEATURES);
++}
++
++// CefBrowserHost::SetWindowlessFrameRate for one off-screen browser (CEF runs it on its UI thread
++// even when this is called from another thread). Returns false if the browser is not created yet.
++JNIEXPORT jboolean JNICALL
++Java_com_levviata_integratedntwiki_mcef_NativeExt_setWindowlessFrameRate0(
++    JNIEnv* env,
++    jclass,
++    jobject jbrowser,
++    jint fps) {
++  CefRefPtr<CefBrowser> browser = GetJNIBrowser(env, jbrowser);
++  if (!browser.get() || !browser->GetHost())
++    return JNI_FALSE;
++  browser->GetHost()->SetWindowlessFrameRate(fps);
++  return JNI_TRUE;
++}
++
++}  // extern "C"

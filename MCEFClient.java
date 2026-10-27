@@ -34,7 +34,7 @@ import org.cef.misc.CefAudioParameters;
 import org.cef.misc.DataPointer;
 import org.cef.network.CefRequest;
 
-import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.List;
 
 /**
@@ -42,10 +42,10 @@ import java.util.List;
  */
 public class MCEFClient implements CefLoadHandler, CefContextMenuHandler, CefDisplayHandler, CefAudioHandler {
     private final CefClient handle;
-    private final List<CefLoadHandler> loadHandlers = new ArrayList<>();
-    private final List<CefContextMenuHandler> contextMenuHandlers = new ArrayList<>();
-    private final List<CefDisplayHandler> displayHandlers = new ArrayList<>();
-    private final List<CefAudioHandler> audioHandlers = new ArrayList<>();
+    private final List<CefLoadHandler> loadHandlers = new CopyOnWriteArrayList<>();
+    private final List<CefContextMenuHandler> contextMenuHandlers = new CopyOnWriteArrayList<>();
+    private final List<CefDisplayHandler> displayHandlers = new CopyOnWriteArrayList<>();
+    private final List<CefAudioHandler> audioHandlers = new CopyOnWriteArrayList<>();
 
     public MCEFClient(CefClient cefClient) {
         handle = cefClient;

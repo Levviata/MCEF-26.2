@@ -1,0 +1,32 @@
+diff --git a/native/context.cpp b/native/context.cpp
+index b47a395..bfc6aa7 100644
+--- a/native/context.cpp
++++ b/native/context.cpp
+@@ -198,8 +198,26 @@ bool Context::Initialize(JNIEnv* env,
+   settings.no_sandbox = true;
+ 
+ #if defined(OS_WIN) || defined(OS_LINUX)
++  // MCEF patch: the Java system property mcef.multiThreadedMessageLoop=true makes an off-screen browser use CEF's own multi-threaded
++  // message loop (Windows and Linux; not macOS) instead of the host calling CefDoMessageLoopWork. Default: upstream behaviour.
++  bool mcef_threaded = false;
++  {
++    ScopedJNIClass sys(env, "java/lang/System");
++    if (sys) {
++      jmethodID get = env->GetStaticMethodID(
++          sys, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;");
++      if (get) {
++        ScopedJNIString key(env, "mcef.multiThreadedMessageLoop");
++        jstring value = (jstring)env->CallStaticObjectMethod(sys, get, key.get());
++        if (env->ExceptionCheck()) env->ExceptionClear();
++        else if (value) mcef_threaded = GetJNIString(env, value) == "true";
++      }
++    }
++  }
++  if (mcef_threaded) settings.multi_threaded_message_loop = true;
++
+   // Use external message pump with OSR.
+-  external_message_pump_ = !!settings.windowless_rendering_enabled;
++  external_message_pump_ = !!settings.windowless_rendering_enabled && !mcef_threaded;
+   if (!external_message_pump_) {
+     // Windowed rendering on Windows requires multi-threaded message loop,
+     // otherwise something eats the messages required by Java and the Java

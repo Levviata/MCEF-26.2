@@ -165,10 +165,38 @@ public final class MCEF {
         }
     }
 
+    /** Which natives to use: {@code auto} (MCEF's build, else upstream with a warning), {@code mcef} (only MCEF's, fail if missing), {@code upstream}. */
+    private static volatile String nativesSource = "auto";
+
+    /** The mod's {@code nativesSource} config value; read when the download starts. */
+    public static void setNativesSource(String value) {
+        nativesSource = value == null ? "auto" : value.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /**
+     * Picks the source and checks it is reachable. In {@code auto}, a missing MCEF build (not published yet, or no network to GitHub) falls
+     * back to the upstream natives, loudly: the Java side feature-detects the library, so this never mixes incompatible pieces.
+     */
+    private static MCEFDownloader chooseDownloader(String commit, MCEFPlatform platform) throws IOException {
+        String want = System.getProperty("integratedntwiki.natives", nativesSource);
+        if (want.equals("upstream")) return new MCEFDownloader(DOWNLOAD_MIRROR, commit, platform, MCEFDownloader.Source.UPSTREAM);
+        MCEFDownloader custom = new MCEFDownloader(DOWNLOAD_MIRROR, commit, platform, MCEFDownloader.Source.MCEF);
+        if (want.equals("mcef")) return custom;
+        try {
+            custom.checkPublished(); // changes nothing on disk; the real checksum comparison happens in download()
+        } catch (IOException e) {
+            LOGGER.warn("The MCEF Chromium build {} is not available ({}); using the upstream natives instead (30 fps cap, no threaded loop). "
+                    + "Set nativesSource=upstream to stop trying, or =mcef to require it.", MCEFDownloader.mcefTag(commit), e.getMessage());
+            return new MCEFDownloader(DOWNLOAD_MIRROR, commit, platform, MCEFDownloader.Source.UPSTREAM);
+        }
+        return custom;
+    }
+
     private static void download() {
         try {
             MCEFPlatform platform = MCEFPlatform.getPlatform();
-            MCEFDownloader downloader = new MCEFDownloader(DOWNLOAD_MIRROR, getJavaCefCommit(), platform);
+            MCEFDownloader downloader = chooseDownloader(getJavaCefCommit(), platform);
+            LOGGER.info("Chromium runtime source: {} ({})", downloader.getSource(), downloader.getJavaCefDownloadUrl());
             File platformDir = new File(System.getProperty("jcef.path"));
 
             // Compare the remote checksum with the local one; a mismatch means the runtime must be re-downloaded.
@@ -286,9 +314,43 @@ public final class MCEF {
         return client != null;
     }
 
-    /** Lets CEF run one iteration of its message loop. Call once per frame from the render thread. */
+    // ---- settings the mod pushes in from its config (the mcef package does not read the config itself)
+
+    private static volatile int fpsMinecraft = 30, fpsDesktop = 60;
+    private static volatile boolean threadedLoopRequested;
+
+    /** Frame rates (1 to 60) Chromium may produce for a browser in the game's shell and in the desktop window. Takes effect at the next frame. */
+    public static void setFrameRates(int minecraftShell, int desktopWindow) {
+        fpsMinecraft = Math.max(1, Math.min(60, minecraftShell));
+        fpsDesktop = Math.max(1, Math.min(60, desktopWindow));
+    }
+
+    static int frameRateMinecraft() { return fpsMinecraft; }
+
+    static int frameRateDesktop() { return fpsDesktop; }
+
+    /** Asks for CEF's own message loop thread (opt-in, Windows only, needs MCEF's libjcef). Must be set before Chromium starts. */
+    public static void setThreadedLoopRequested(boolean wanted) {
+        threadedLoopRequested = wanted;
+    }
+
+    static boolean threadedLoopRequested() { return threadedLoopRequested; }
+
+    /**
+     * Runs {@code task} on the render thread: at once when this is it (always, with the host-pumped loop, where every callback already
+     * is on it), otherwise queued to the game's main thread. For work in a Chromium callback that must not run on Chromium's thread
+     * (the window library's calls, the shell's tab list).
+     */
+    public static void onRenderThread(Runnable task) {
+        if (!NativeExt.threadedLoopActive()) { task.run(); return; }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.isSameThread()) task.run();
+        else mc.execute(task);
+    }
+
+    /** Lets CEF run one iteration of its message loop. Call once per frame from the render thread. Does nothing in the threaded loop mode. */
     public static void pump() {
-        if (app == null) return;
+        if (app == null || NativeExt.threadedLoopActive()) return;
         long probe = com.levviata.integratedntwiki.shell.FrameProbe.begin();
         app.getHandle().N_DoMessageLoopWork(); // Chromium's frame callbacks run in here, so the probe's pump time includes the paint copies
         com.levviata.integratedntwiki.shell.FrameProbe.pump(probe);
