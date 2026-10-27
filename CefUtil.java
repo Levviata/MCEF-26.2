@@ -77,7 +77,14 @@ final class CefUtil {
 
         // Chromium's own middle-click autoscroll (the scroll-by-dragging mode). It is a renderer feature that is
         // on by default on Windows only; this makes it available on every platform. An unknown feature name is ignored.
-        String[] cefSwitches = {"--enable-features=MiddleClickAutoscroll"};
+        java.util.List<String> switchList = new java.util.ArrayList<>(java.util.List.of("--enable-features=MiddleClickAutoscroll"));
+        // For experiments: -Dmcef.chromiumSwitches="--disable-gpu-vsync --disable-frame-rate-limit" (space separated, each starting with --)
+        String extra = System.getProperty("mcef.chromiumSwitches", "").trim();
+        if (!extra.isEmpty()) {
+            for (String sw : extra.split("\\s+")) if (sw.startsWith("--")) switchList.add(sw);
+            MCEF.getLogger().warn("Extra Chromium switches from -Dmcef.chromiumSwitches: {}", extra);
+        }
+        String[] cefSwitches = switchList.toArray(new String[0]);
         if (!CefApp.startup(cefSwitches)) {
             return false;
         }
