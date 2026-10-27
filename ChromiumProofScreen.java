@@ -21,6 +21,7 @@ import com.levviata.integratedntwiki.shell.MarkerScripts;
 import com.levviata.integratedntwiki.shell.MarkerStore;
 import com.levviata.integratedntwiki.shell.PageKeys;
 import com.levviata.integratedntwiki.shell.Tooltips;
+import com.levviata.integratedntwiki.shell.ScrollBar;
 import com.levviata.integratedntwiki.shell.ShellLayout;
 import com.levviata.integratedntwiki.shell.ShellLayout.Hit;
 import com.levviata.integratedntwiki.shell.ShellLayout.Part;
@@ -121,6 +122,12 @@ public final class ChromiumProofScreen extends Screen {
     private boolean swallowRightRelease;
     private static final int MENU_ITEM_H = 12;
     private boolean menuOpen;
+    /** A scroll bar being dragged with the left button (its list, and where on the thumb it was grabbed). */
+    private enum BarDrag { NONE, MENU, MARKERS, KEYS }
+    private BarDrag barDrag = BarDrag.NONE;
+    private int barGrab;
+    /** First row shown and rows shown of a menu longer than the shell is tall. */
+    private int menuScroll, menuRows;
     private BrowserTab menuTab;
     private java.util.List<MenuItem> menuItems = java.util.List.of();
     private int menuX, menuY, menuW, menuH, rightClickX, rightClickY;
@@ -1067,6 +1074,8 @@ public final class ChromiumProofScreen extends Screen {
         if (menuOpen && button == GLFW.GLFW_MOUSE_BUTTON_RIGHT) {
             closeContextMenu(); // a right-click while the menu is open closes it and goes on to the page: it opens the new menu
         } else if (menuOpen) { // the menu takes the click: an item runs on left click, anything else only closes it
+            if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT && pressBar(BarDrag.MENU, x, y)) return true; // its scroll bar scrolls, the menu stays
+            if (menuBar().contains(x, y)) return true;
             int item = menuItemAt(x, y);
             MenuItem chosen = item >= 0 ? menuItems.get(item) : null;
             if (chosen != null && chosen.separator()) return true; // a separator line is not a choice: the menu stays
@@ -1087,6 +1096,13 @@ public final class ChromiumProofScreen extends Screen {
             return true;
         }
         Hit hit = hitAt(event.x(), event.y());
+        if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT) { // the key map's and the marker list's scroll bars
+            BarDrag bar = barAt(x, y);
+            if (bar != BarDrag.NONE && pressBar(bar, x, y)) {
+                tab.input().cancelAutoscroll();
+                return true;
+            }
+        }
         // The zoom menu closes when the user clicks anywhere else (the zoom button toggles it itself).
         if (zoomMenuOpen && !isZoomPart(hit.part())) closeZoomMenu();
         // Marker panel: a click inside the name being edited moves its caret; any other click ends the edit (the typed name is kept)
@@ -1201,6 +1217,10 @@ public final class ChromiumProofScreen extends Screen {
         }
         if (event.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT && drag == Drag.MOVE) commitSnap();
         if (event.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT) draggingField = null;
+        if (event.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT && barDrag != BarDrag.NONE) {
+            barDrag = BarDrag.NONE;
+            return true;
+        }
         if (event.button() == GLFW.GLFW_MOUSE_BUTTON_LEFT && (pressed != null || drag != Drag.NONE)) {
             Hit down = pressed;
             pressed = null;
@@ -1221,6 +1241,10 @@ public final class ChromiumProofScreen extends Screen {
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
         double x = toShell(event.x()), y = toShell(event.y());
+        if (barDrag != BarDrag.NONE) {
+            setBarOffset(barDrag, barOf(barDrag).offsetAt(y, barGrab));
+            return true;
+        }
         if (draggingField != null) {
             draggingField.setCaretFromX((int) x - fieldOrigin(draggingField), true, metrics());
             return true;
@@ -1272,6 +1296,10 @@ public final class ChromiumProofScreen extends Screen {
     @Override
     public boolean mouseScrolled(double guiX, double guiY, double scrollX, double scrollY) {
         if (menuOpen) {
+            if (menuRows < menuItems.size()) { // a long menu (the tab list) scrolls
+                if (scrollY != 0) setBarOffset(BarDrag.MENU, menuScroll - (int) Math.signum(scrollY) * 3);
+                return true;
+            }
             closeContextMenu();
             return true;
         }
@@ -1381,8 +1409,59 @@ public final class ChromiumProofScreen extends Screen {
 
     private int menuItemAt(double x, double y) {
         if (x < menuX || x >= menuX + menuW || y < menuY + 2 || y >= menuY + menuH - 2) return -1;
-        int i = (int) ((y - menuY - 2) / MENU_ITEM_H);
-        return i >= 0 && i < menuItems.size() ? i : -1;
+        if (menuBar().contains(x, y)) return -1; // the bar is not a row
+        int i = menuScroll + (int) ((y - menuY - 2) / MENU_ITEM_H);
+        return i >= menuScroll && i < Math.min(menuItems.size(), menuScroll + menuRows) ? i : -1;
+    }
+
+    private ScrollBar menuBar() {
+        return new ScrollBar(menuX + menuW - ScrollBar.HIT_W - 1, menuY + 2, menuRows * MENU_ITEM_H, menuItems.size(), menuRows);
+    }
+
+    private ScrollBar barOf(BarDrag which) {
+        return switch (which) {
+            case MENU -> menuBar();
+            case MARKERS -> session.layout().markerBar(markers().size());
+            case KEYS -> session.layout().keysBar(keysLines.size());
+            case NONE -> new ScrollBar(0, 0, 0, 0, 0);
+        };
+    }
+
+    private int barOffset(BarDrag which) {
+        return switch (which) { case MENU -> menuScroll; case MARKERS -> markerScroll; case KEYS -> keysScroll; case NONE -> 0; };
+    }
+
+    private void setBarOffset(BarDrag which, int offset) {
+        switch (which) {
+            case MENU -> menuScroll = Math.max(0, Math.min(offset, Math.max(0, menuItems.size() - menuRows)));
+            case MARKERS -> { markerScroll = offset; clampMarkerScroll(); }
+            case KEYS -> keysScroll = ControlList.clampScroll(offset, keysLines.size(), session.layout().keysRows());
+            case NONE -> { }
+        }
+    }
+
+    /** A left press on a scroll bar's strip: jumps there (or grabs the thumb) and starts following the pointer. */
+    private boolean pressBar(BarDrag which, double x, double y) {
+        ScrollBar bar = barOf(which);
+        if (!bar.contains(x, y)) return false;
+        barGrab = bar.grab(y, barOffset(which));
+        barDrag = which;
+        setBarOffset(which, bar.offsetAt(y, barGrab));
+        return true;
+    }
+
+    /** Which open list's bar is under the point, if any. */
+    private BarDrag barAt(double x, double y) {
+        if (keysOpen && barOf(BarDrag.KEYS).contains(x, y)) return BarDrag.KEYS;
+        if (markerPanelOpen && barOf(BarDrag.MARKERS).contains(x, y)) return BarDrag.MARKERS;
+        return BarDrag.NONE;
+    }
+
+    private void drawBar(GuiGraphicsExtractor g, ScrollBar bar, int offset, BarDrag which) {
+        if (!bar.scrollable()) return;
+        int t = bar.thumbTop(offset);
+        int x0 = bar.x() + (ScrollBar.HIT_W - ScrollBar.DRAW_W) / 2;
+        g.fill(x0, t, x0 + ScrollBar.DRAW_W, t + bar.thumbLength(), barDrag == which ? TEXT : TEXT_DIM);
     }
 
     private static void copyToClipboard(String text) {
@@ -1415,7 +1494,11 @@ public final class ChromiumProofScreen extends Screen {
         }
         menuItems = items;
         menuW = w + 14;
-        menuH = items.size() * MENU_ITEM_H + 4;
+        menuRows = Math.max(1, Math.min(items.size(), Math.min(20, (shellH() - 4) / MENU_ITEM_H)));
+        menuScroll = 0;
+        barDrag = BarDrag.NONE;
+        if (menuRows < items.size()) menuW += ScrollBar.HIT_W; // room for the scroll bar beside the rows
+        menuH = menuRows * MENU_ITEM_H + 4;
         menuX = Math.max(0, Math.min(atX, shellW() - menuW));
         menuY = Math.max(0, Math.min(atY, shellH() - menuH));
         menuOpen = true;
@@ -1941,11 +2024,7 @@ public final class ChromiumProofScreen extends Screen {
                 }
             }
         }
-        if (keysLines.size() > rows) { // thin scroll thumb at the panel's right edge
-            int track = rows * ShellLayout.KEYS_ROW, thumb = Math.max(8, track * rows / keysLines.size());
-            int y = body.y() + (track - thumb) * keysScroll / Math.max(1, keysLines.size() - rows);
-            g.fill(p.right() - 3, y, p.right() - 1, y + thumb, TEXT_DIM);
-        }
+        drawBar(g, layout.keysBar(keysLines.size()), keysScroll, BarDrag.KEYS);
     }
 
     private void drawMarkerPanel(GuiGraphicsExtractor g, ShellLayout layout, BrowserTab tab, Hit hover) {
@@ -1981,20 +2060,17 @@ public final class ChromiumProofScreen extends Screen {
             if (hover.part() == Part.MARKER_DELETE && hover.index() == i) g.fill(del.x(), del.y(), del.right(), del.bottom(), CLOSE_HOVER);
             Icons.drawCentered(g, Icons.CLOSE, del.x(), del.y(), del.w(), del.h(), over ? TEXT : TEXT_DIM);
         }
-        if (list.size() > rows) { // a thin scroll thumb at the panel's right edge
-            int track = rows * ShellLayout.MARKER_ROW, thumb = Math.max(8, track * rows / list.size());
-            int y = p.y() + ShellLayout.MARKER_HEADER + (track - thumb) * markerScroll / Math.max(1, list.size() - rows);
-            g.fill(p.right() - 3, y, p.right() - 1, y + thumb, TEXT_DIM);
-        }
+        drawBar(g, layout.markerBar(list.size()), markerScroll, BarDrag.MARKERS);
     }
 
     private void drawContextMenu(GuiGraphicsExtractor g, int mouseX, int mouseY) {
         g.fill(menuX, menuY, menuX + menuW, menuY + menuH, EDGE);
         g.fill(menuX + 1, menuY + 1, menuX + menuW - 1, menuY + menuH - 1, TAB_ACTIVE);
         int hovered = menuItemAt(mouseX, mouseY);
-        for (int i = 0; i < menuItems.size(); i++) {
+        for (int r = 0; r < menuRows && menuScroll + r < menuItems.size(); r++) {
+            int i = menuScroll + r;
             MenuItem it = menuItems.get(i);
-            int y = menuY + 2 + i * MENU_ITEM_H;
+            int y = menuY + 2 + r * MENU_ITEM_H;
             if (it.separator()) {
                 g.fill(menuX + 4, y + MENU_ITEM_H / 2, menuX + menuW - 4, y + MENU_ITEM_H / 2 + 1, EDGE);
                 continue;
@@ -2004,6 +2080,7 @@ public final class ChromiumProofScreen extends Screen {
             g.text(font, it.label(), menuX + 7, textY, it.enabled() ? TEXT : TEXT_DIM, false);
             if (!it.shortcut().isEmpty()) g.text(font, it.shortcut(), menuX + menuW - 7 - font.width(it.shortcut()), textY, TEXT_DIM, false);
         }
+        drawBar(g, menuBar(), menuScroll, BarDrag.MENU);
     }
 
     /** The wiki could not be loaded: the error replaces the page area (Chromium's own error page is a navigation we do not control). */
