@@ -325,6 +325,13 @@ public final class MCEF {
         fpsDesktop = Math.max(1, Math.min(60, desktopWindow));
     }
 
+    private static volatile boolean smoothScrolling = true;
+
+    /** Spreads each wheel notch over several small steps (see {@link SmoothWheel}); off sends one jump per notch like before. */
+    public static void setSmoothScrolling(boolean on) { smoothScrolling = on; }
+
+    static boolean smoothScrolling() { return smoothScrolling; }
+
     static int frameRateMinecraft() { return fpsMinecraft; }
 
     static int frameRateDesktop() { return fpsDesktop; }
