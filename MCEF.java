@@ -356,8 +356,25 @@ public final class MCEF {
     public static void onRenderThread(Runnable task) {
         if (!NativeExt.threadedLoopActive()) { task.run(); return; }
         Minecraft mc = Minecraft.getInstance();
-        if (mc.isSameThread()) task.run();
-        else mc.execute(task);
+        if (mc.isSameThread()) { task.run(); return; }
+        // Our own queue, drained by the game's next task run and, much sooner, by the desktop window's pump loop: the game's loop runs only a
+        // few times a second while the game is in the background, and the desktop window's title, address and cursor waited for it.
+        RENDER_TASKS.add(task);
+        mc.execute(MCEF::drainRenderTasks);
+    }
+
+    private static final java.util.Queue<Runnable> RENDER_TASKS = new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    /** Runs the work Chromium's threads queued for the render thread. Call from the render thread only. */
+    public static void drainRenderTasks() {
+        Runnable t;
+        while ((t = RENDER_TASKS.poll()) != null) {
+            try {
+                t.run();
+            } catch (RuntimeException e) {
+                LOGGER.error("A task queued for the render thread failed", e);
+            }
+        }
     }
 
     /** Lets CEF run one iteration of its message loop. Call once per frame from the render thread. Does nothing in the threaded loop mode. */
