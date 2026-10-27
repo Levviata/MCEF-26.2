@@ -238,6 +238,7 @@ public final class ChromiumProofScreen extends Screen {
     protected void init() {
         MCEF.prepare();
         session = BrowserSession.get();
+        com.levviata.integratedntwiki.desktop.DesktopShell.restoreSession(); // the page the last run ended on (shared with the desktop window); only if no tab is open yet
         if (openMessage != null) { showStatus(openMessage); openMessage = null; }
         if (openKeys) { openKeys = false; showKeys(); }
         session.useUnit(unit());
@@ -2331,6 +2332,7 @@ public final class ChromiumProofScreen extends Screen {
     /** Runs whenever the screen is replaced or closed. The browsers stay in the session unless it was disposed. */
     @Override
     public void removed() {
+        if (session.tabCount() > 0) com.levviata.integratedntwiki.desktop.DesktopShell.rememberSession(); // the next run (or the desktop window) continues on this page
         if (!tearing) session.shell().cancelDrag(); // a tear-off keeps its drag: the desktop window continues it
         if (cursorEdges != WindowResize.NONE) { // the resize cursor must not outlive the screen
             cursorEdges = WindowResize.NONE;
