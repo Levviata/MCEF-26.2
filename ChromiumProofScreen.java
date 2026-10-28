@@ -467,7 +467,7 @@ public final class ChromiumProofScreen extends Screen {
         if (findOpen) drawFindBar(g, layout, hover);
         if (zoomMenuOpen) drawZoomMenu(g, layout, active, hover);
         if (markerPanelOpen) drawMarkerPanel(g, layout, active, hover);
-        if (keysOpen) drawKeysPanel(g, layout, hover);
+        if (keysOpen) drawKeysPanel(g, layout, hover, mouseX, mouseY);
 
         if (menuOpen) drawContextMenu(g, mouseX, mouseY);
 
@@ -495,7 +495,7 @@ public final class ChromiumProofScreen extends Screen {
 
     /** The tooltip for what the pointer rests on, after {@link Tooltips#DELAY_MS}; none while a menu, a drag or a key rebind is going on. */
     private void drawTooltip(GuiGraphicsExtractor g, ShellLayout layout, BrowserTab active, Hit hover, int mx, int my) {
-        int row = hover.part() == Part.KEYS_PANEL ? KeyRebind.lineAt(my, layout.keysBody().y(), ShellLayout.KEYS_ROW, keysScroll, keysLines.size()) : -1;
+        int row = hover.part() == Part.KEYS_PANEL ? keysRowAt(layout, mx, my) : -1;
         long now = System.currentTimeMillis();
         if (!hover.equals(tipHit) || row != tipRow) { tipHit = hover; tipRow = row; tipSince = now; }
         if (menuOpen || drag != Drag.NONE || rebindId != null || now - tipSince < Tooltips.DELAY_MS) return;
@@ -1149,7 +1149,7 @@ public final class ChromiumProofScreen extends Screen {
         tab.input().focusMinecraft(); // clicking anything that is not the page takes the keyboard from it
         if (hit.part() == Part.NONE) return true;
         if (hit.part() == Part.KEYS_PANEL) { // a key mapping's row: the next key pressed becomes its key
-            if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT) clickKeysRow((int) y);
+            if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT) clickKeysRow((int) x, (int) y);
             return true;
         }
         if (hit.part() == Part.URL_FIELD) {
@@ -1973,11 +1973,45 @@ public final class ChromiumProofScreen extends Screen {
         if (rebindId != null && rebindId.startsWith(ControlList.Line.PAD_ID)) ControlSource.cancelPadCapture();
     }
 
-    private void clickKeysRow(int y) {
+    /** The line under a point of the controls panel, or -1 over the footer, the reset buttons or empty space. */
+    private int keysRowAt(ShellLayout layout, int x, int y) {
+        Rect body = layout.keysBody();
+        if (y < body.y() || y >= body.y() + layout.keysRows() * ShellLayout.KEYS_ROW) return -1;
+        int i = KeyRebind.lineAt(y, body.y(), ShellLayout.KEYS_ROW, keysScroll, keysLines.size());
+        if (i < 0) return -1;
+        if (keysLines.get(i).rebindable() && layout.keysRowReset(rowTop(layout, y), ShellLayout.KEYS_ROW).contains(x, y)) return -1;
+        return i;
+    }
+
+    /** The top of the row a y falls in (rows start at the body's top, {@link ShellLayout#KEYS_ROW} high). */
+    private static int rowTop(ShellLayout layout, int y) {
+        int top = layout.keysBody().y();
+        return top + (y - top) / ShellLayout.KEYS_ROW * ShellLayout.KEYS_ROW;
+    }
+
+    private void clickKeysRow(int x, int y) {
         ShellLayout layout = session.layout();
-        int i = KeyRebind.lineAt(y, layout.keysBody().y(), ShellLayout.KEYS_ROW, keysScroll, keysLines.size());
-        ControlList.Line line = i < 0 ? null : keysLines.get(i);
         endPadWait();
+        rebindId = null;
+        if (layout.keysResetPad().contains(x, y)) { // [Reset Controller]
+            ControlSource.resetController();
+            keysLines = ControlSource.lines(minecraft);
+            return;
+        }
+        if (layout.keysResetKeys().contains(x, y)) { // [Reset Mod Keybinds]
+            ControlSource.resetKeys(minecraft);
+            keysLines = ControlSource.lines(minecraft);
+            return;
+        }
+        Rect body = layout.keysBody();
+        if (y < body.y() || y >= body.y() + layout.keysRows() * ShellLayout.KEYS_ROW) return;
+        int i = KeyRebind.lineAt(y, body.y(), ShellLayout.KEYS_ROW, keysScroll, keysLines.size());
+        ControlList.Line line = i < 0 ? null : keysLines.get(i);
+        if (line != null && line.rebindable() && layout.keysRowReset(rowTop(layout, y), ShellLayout.KEYS_ROW).contains(x, y)) { // the row's own reset
+            ControlSource.resetRow(minecraft, line.id());
+            keysLines = ControlSource.lines(minecraft);
+            return;
+        }
         rebindId = line != null && line.rebindable() ? line.id() : null;
         if (line != null && line.padRow()) { // the next controller press is the new button (the press that clicked here does not count)
             String id = line.id();
@@ -2010,7 +2044,7 @@ public final class ChromiumProofScreen extends Screen {
         else showKeys();
     }
 
-    private void drawKeysPanel(GuiGraphicsExtractor g, ShellLayout layout, Hit hover) {
+    private void drawKeysPanel(GuiGraphicsExtractor g, ShellLayout layout, Hit hover, int mouseX, int mouseY) {
         Rect p = layout.keysPanel();
         g.fill(p.x(), p.y(), p.right(), p.bottom(), EDGE);
         g.fill(p.x() + 1, p.y() + 1, p.right() - 1, p.bottom() - 1, TAB_ACTIVE);
@@ -2030,15 +2064,33 @@ public final class ChromiumProofScreen extends Screen {
                 case ROW -> {
                     boolean note = !line.note().isEmpty();
                     int color = line.warn() ? WARN_COLOR : TEXT_DIM;
+                    int rowTop = body.y() + i * ShellLayout.KEYS_ROW;
+                    Rect reset = layout.keysRowReset(rowTop, ShellLayout.KEYS_ROW);
+                    int limit = line.rebindable() ? reset.x() - 2 : body.right(); // the reset button takes the row's right end
                     g.text(font, fit(line.left(), keysX - nameX - 4), nameX, y, TEXT, false);
                     boolean waiting = line.rebindable() && line.id().equals(rebindId);
                     String keyText = waiting ? Component.translatable(line.padRow() ? "integratedntwiki.keys.pressPad" : "integratedntwiki.keys.press").getString() : line.right();
-                    g.text(font, fit(keyText, (note ? noteX : body.right()) - keysX - 4), keysX, y, waiting ? ACCENT : color, false);
-                    if (note) g.text(font, fit(line.note(), body.right() - noteX - 4), noteX, y, color, false);
+                    g.text(font, fit(keyText, (note ? noteX : limit) - keysX - 4), keysX, y, waiting ? ACCENT : color, false);
+                    if (note) g.text(font, fit(line.note(), limit - noteX - 4), noteX, y, color, false);
+                    if (line.rebindable()) {
+                        boolean over = reset.contains(mouseX, mouseY);
+                        g.fill(reset.x(), reset.y(), reset.right(), reset.bottom(), over ? BUTTON_HOVER : TAB_IDLE);
+                        g.text(font, "R", reset.x() + (reset.w() - font.width("R")) / 2, y, over ? TEXT : TEXT_DIM, false);
+                    }
                 }
             }
         }
         drawBar(g, layout.keysBar(keysLines.size()), keysScroll, BarDrag.KEYS);
+        keysFooterButton(g, layout.keysResetPad(), Component.translatable("integratedntwiki.keys.resetController").getString(), mouseX, mouseY);
+        keysFooterButton(g, layout.keysResetKeys(), Component.translatable("integratedntwiki.keys.resetKeys").getString(), mouseX, mouseY);
+    }
+
+    private void keysFooterButton(GuiGraphicsExtractor g, Rect r, String label, int mouseX, int mouseY) {
+        boolean over = r.contains(mouseX, mouseY);
+        g.fill(r.x(), r.y(), r.right(), r.bottom(), EDGE);
+        g.fill(r.x() + 1, r.y() + 1, r.right() - 1, r.bottom() - 1, over ? BUTTON_HOVER : TAB_IDLE);
+        String text = fit(label, r.w() - 6);
+        g.text(font, text, r.x() + (r.w() - font.width(text)) / 2, r.y() + (r.h() - font.lineHeight) / 2, TEXT, false);
     }
 
     private void drawMarkerPanel(GuiGraphicsExtractor g, ShellLayout layout, BrowserTab tab, Hit hover) {
