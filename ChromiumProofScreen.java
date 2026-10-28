@@ -2499,7 +2499,6 @@ public final class ChromiumProofScreen extends Screen {
     @Override
     public void removed() {
         endPadWait(); // a controller row must not keep waiting for a button once this screen is gone
-        com.levviata.integratedntwiki.desktop.DesktopShell.onShellClosed(); // came from the desktop window: it opens again (option returnToDesktop)
         if (session.tabCount() > 0) com.levviata.integratedntwiki.desktop.DesktopShell.rememberSession(); // the next run (or the desktop window) continues on this page
         if (!tearing) session.shell().cancelDrag(); // a tear-off keeps its drag: the desktop window continues it
         if (cursorEdges != WindowResize.NONE) { // the resize cursor must not outlive the screen
