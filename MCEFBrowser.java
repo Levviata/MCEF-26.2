@@ -638,22 +638,13 @@ public class MCEFBrowser extends CefBrowserOsr {
             target.onCursor(cursorType.name());
             return;
         }
-        // The cursor mode is only changed to hide the cursor for the page (CSS cursor: none) and to undo exactly that. Forcing it back
-        // to "normal" on every cursor change would also release a cursor another component holds hidden or captured (a controller
-        // mod's virtual mouse captures it), and the release itself comes back as a mouse movement. The flag can outlive a closed
-        // window (the cursor was hidden, then the game grabbed the mouse): the next ordinary cursor then shows it once, as it always did.
-        if (cursorType == CefCursorType.NONE) {
-            GLFW.glfwSetInputMode(GLFW.glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
-            pageHidCursor = true;
-        } else {
-            if (pageHidCursor) {
-                GLFW.glfwSetInputMode(GLFW.glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                pageHidCursor = false;
-            }
-            GLFW.glfwSetCursor(GLFW.glfwGetCurrentContext(), MCEF.getGLFWCursorHandle(cursorType));
-        }
+        // A "no cursor" request is ignored: Chromium sends it whenever a key is pressed in the page (it hides the cursor while typing, until the
+        // mouse moves), and a pointer that stays hidden until the next movement is wrong here, where the pointer is often moved by a controller
+        // stick and is the only way to see where a click would land. The cost: a page that hides the cursor on purpose (CSS "cursor: none",
+        // a video player) no longer can. The cursor mode is therefore never changed by this class, which also leaves a cursor another component
+        // holds hidden or captured (a controller mod's virtual mouse) alone.
+        if (cursorType == CefCursorType.NONE) return;
+        GLFW.glfwSetCursor(GLFW.glfwGetCurrentContext(), MCEF.getGLFWCursorHandle(cursorType));
     }
 
-    /** Whether a page hid the game window's cursor ({@link CefCursorType#NONE}); one window, so shared by every browser. */
-    private static boolean pageHidCursor;
 }
