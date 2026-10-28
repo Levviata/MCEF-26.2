@@ -102,9 +102,6 @@ final class CefUtil {
         cefSettings.windowless_rendering_enabled = true;
         Path cache = new File(System.getProperty("mcef.libraries.path")).toPath().resolveSibling("cache");
         cefSettings.cache_path = cache.toAbsolutePath().toString(); // jcef wants an absolute path
-        // Without this Chromium keeps only cookies that carry an expiry; a wiki login made without "keep me logged in" is a session cookie
-        // and was gone at the next start (the browser opened logged out although the profile folder was kept).
-        cefSettings.persist_session_cookies = true;
         cefSettings.background_color = cefSettings.new ColorType(0, 255, 255, 255);
         cefSettings.user_agent_product = "IntegratedNTWiki/1";
 

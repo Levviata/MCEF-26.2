@@ -274,21 +274,15 @@ public final class MCEF {
             java.util.List<com.levviata.integratedntwiki.wiki.WikiCookies.Cached> cached = com.levviata.integratedntwiki.wiki.WikiCookies.cached();
             if (cached.isEmpty()) return;
             org.cef.network.CefCookieManager manager = org.cef.network.CefCookieManager.getGlobalManager();
-            if (manager == null) {
-                WikiLog.warn("Cached wiki login not restored: Chromium has no cookie manager yet ({} cookies waiting)", cached.size());
-                return;
-            }
+            if (manager == null) return;
             long now = System.currentTimeMillis();
             java.util.Date created = new java.util.Date(now);
-            int accepted = 0;
             for (com.levviata.integratedntwiki.wiki.WikiCookies.Cached c : cached) {
                 java.util.Date expires = new java.util.Date(now + c.ageSeconds() * 1000L);
-                if (manager.setCookie("https://nucleartech.wiki/", new org.cef.network.CefCookie(c.name(), c.value(), "nucleartech.wiki", "/",
-                        true, true, created, created, true, expires))) accepted++;
-                else WikiLog.warn("Chromium refused the cached wiki cookie '{}'", c.name());
+                manager.setCookie("https://nucleartech.wiki/", new org.cef.network.CefCookie(c.name(), c.value(), "nucleartech.wiki", "/",
+                        true, true, created, created, true, expires));
             }
-            manager.flushStore(null); // written to the profile now, not only at a clean shutdown
-            WikiLog.info("Handed {} of {} cached wiki login cookies to Chromium", accepted, cached.size());
+            WikiLog.info("Restored " + cached.size() + " cached wiki login cookies into Chromium");
         } catch (RuntimeException | LinkageError e) {
             WikiLog.warn("Could not restore the cached wiki login: " + e);
         }
