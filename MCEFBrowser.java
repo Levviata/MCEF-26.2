@@ -638,11 +638,22 @@ public class MCEFBrowser extends CefBrowserOsr {
             target.onCursor(cursorType.name());
             return;
         }
+        // The cursor mode is only changed to hide the cursor for the page (CSS cursor: none) and to undo exactly that. Forcing it back
+        // to "normal" on every cursor change would also release a cursor another component holds hidden or captured (a controller
+        // mod's virtual mouse captures it), and the release itself comes back as a mouse movement. The flag can outlive a closed
+        // window (the cursor was hidden, then the game grabbed the mouse): the next ordinary cursor then shows it once, as it always did.
         if (cursorType == CefCursorType.NONE) {
             GLFW.glfwSetInputMode(GLFW.glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+            pageHidCursor = true;
         } else {
-            GLFW.glfwSetInputMode(GLFW.glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            if (pageHidCursor) {
+                GLFW.glfwSetInputMode(GLFW.glfwGetCurrentContext(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                pageHidCursor = false;
+            }
             GLFW.glfwSetCursor(GLFW.glfwGetCurrentContext(), MCEF.getGLFWCursorHandle(cursorType));
         }
     }
+
+    /** Whether a page hid the game window's cursor ({@link CefCursorType#NONE}); one window, so shared by every browser. */
+    private static boolean pageHidCursor;
 }
