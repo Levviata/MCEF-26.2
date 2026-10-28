@@ -1964,14 +1964,28 @@ public final class ChromiumProofScreen extends Screen {
 
     private void closeKeys() {
         keysOpen = false;
+        endPadWait();
         rebindId = null;
+    }
+
+    /** A controller row that is waiting for a button stops waiting (Phase 7 rebinding). */
+    private void endPadWait() {
+        if (rebindId != null && rebindId.startsWith(ControlList.Line.PAD_ID)) ControlSource.cancelPadCapture();
     }
 
     private void clickKeysRow(int y) {
         ShellLayout layout = session.layout();
         int i = KeyRebind.lineAt(y, layout.keysBody().y(), ShellLayout.KEYS_ROW, keysScroll, keysLines.size());
         ControlList.Line line = i < 0 ? null : keysLines.get(i);
+        endPadWait();
         rebindId = line != null && line.rebindable() ? line.id() : null;
+        if (line != null && line.padRow()) { // the next controller press is the new button (the press that clicked here does not count)
+            String id = line.id();
+            ControlSource.capturePad(id, () -> {
+                keysLines = ControlSource.lines(minecraft);
+                if (id.equals(rebindId)) rebindId = null;
+            });
+        }
     }
 
     /** A key press while a mapping waits for its key (NeoForge's Key Binds rules: modifiers held count, Esc unbinds). */
@@ -2018,7 +2032,7 @@ public final class ChromiumProofScreen extends Screen {
                     int color = line.warn() ? WARN_COLOR : TEXT_DIM;
                     g.text(font, fit(line.left(), keysX - nameX - 4), nameX, y, TEXT, false);
                     boolean waiting = line.rebindable() && line.id().equals(rebindId);
-                    String keyText = waiting ? Component.translatable("integratedntwiki.keys.press").getString() : line.right();
+                    String keyText = waiting ? Component.translatable(line.padRow() ? "integratedntwiki.keys.pressPad" : "integratedntwiki.keys.press").getString() : line.right();
                     g.text(font, fit(keyText, (note ? noteX : body.right()) - keysX - 4), keysX, y, waiting ? ACCENT : color, false);
                     if (note) g.text(font, fit(line.note(), body.right() - noteX - 4), noteX, y, color, false);
                 }
@@ -2432,6 +2446,7 @@ public final class ChromiumProofScreen extends Screen {
     /** Runs whenever the screen is replaced or closed. The browsers stay in the session unless it was disposed. */
     @Override
     public void removed() {
+        endPadWait(); // a controller row must not keep waiting for a button once this screen is gone
         if (session.tabCount() > 0) com.levviata.integratedntwiki.desktop.DesktopShell.rememberSession(); // the next run (or the desktop window) continues on this page
         if (!tearing) session.shell().cancelDrag(); // a tear-off keeps its drag: the desktop window continues it
         if (cursorEdges != WindowResize.NONE) { // the resize cursor must not outlive the screen
